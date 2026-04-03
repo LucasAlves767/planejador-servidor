@@ -351,8 +351,8 @@ def criar_auto():
         for _ in range(10):
             try:
                 cur.execute(
-                    "INSERT INTO usuarios (nome,email,chave,expira,ativo) VALUES (%s,%s,%s,%s,True) RETURNING chave",
-                    (nome, email, chave, exp)
+                    "INSERT INTO usuarios (nome,email,chave,expira,ativo) VALUES (%s,%s,%s,%s,%s) RETURNING chave",
+                    (nome, email, chave, exp, True)
                 )
                 chave = cur.fetchone()['chave']
                 conn.commit()
