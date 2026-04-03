@@ -19,8 +19,12 @@ def get_db():
 def row_to_dict(row):
     d = dict(row)
     for k, v in d.items():
-        if v is None or isinstance(v, (str, int, float, bool)):
+        if v is None or isinstance(v, (str, float, bool)):
             pass
+        elif isinstance(v, int):
+            # coluna ativo pode ser integer (0/1) no banco antigo — converte para bool
+            if k == 'ativo':
+                d[k] = bool(v)
         elif hasattr(v, 'isoformat'):
             d[k] = v.isoformat()
         else:
@@ -722,7 +726,7 @@ def admin_criar():
                 cur.execute(
                     "INSERT INTO usuarios (nome, email, chave, expira, ativo) "
                     "VALUES (%s, %s, %s, %s, %s) RETURNING chave",
-                    (nome, email, chave, exp, True)
+                    (nome, email, chave, exp, 1)
                 )
                 chave = cur.fetchone()['chave']
                 conn.commit()
