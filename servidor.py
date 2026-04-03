@@ -47,6 +47,13 @@ def init_db():
             """)
         conn.commit()
 
+# Inicializa banco ao subir — funciona com Gunicorn também
+try:
+    init_db()
+    print("✅ Banco inicializado com sucesso!")
+except Exception as e:
+    print(f"⚠ Erro ao inicializar banco: {e}")
+
 # ───────────────────────────────────────────────
 # API — validação de chave
 # ───────────────────────────────────────────────
@@ -205,7 +212,7 @@ PAINEL_HTML = """
 <div class="toast" id="toast"></div>
 
 <script>
-const ADMIN_PASSWORD = "admin123";  // ← TROQUE ANTES DE SUBIR!
+const ADMIN_PASSWORD = "admin123";  // ← TROQUE ISSO!
 
 function checkPass(){
   if(document.getElementById('adminPass').value === ADMIN_PASSWORD){
@@ -366,8 +373,6 @@ def admin_deletar():
 def health():
     return jsonify({"status": "ok"})
 
-# ───────────────────────────────────────────────
 if __name__ == "__main__":
-    init_db()
     port = int(os.environ.get("PORT", 5000))
     app.run(host="0.0.0.0", port=port)
