@@ -7,171 +7,142 @@ import string
 
 app = Flask(__name__)
 
-# 1. CONEXÃO AO BANCO (RENDER / POSTGRES)
+# CONFIGURAÇÃO BANCO DE DADOS RENDER
 DATABASE_URL = os.environ.get("DATABASE_URL", "").replace("postgres://", "postgresql://", 1)
 
 def get_db():
     return psycopg2.connect(DATABASE_URL, cursor_factory=psycopg2.extras.RealDictCursor)
 
-def gerar_chave_automatica():
-    caracteres = string.ascii_uppercase + string.digits
-    p1 = ''.join(random.choices(caracteres, k=4))
-    p2 = ''.join(random.choices(caracteres, k=4))
-    return f"LUCS-{p1}-{p2}"
+def gerar_serial():
+    chars = string.ascii_uppercase + string.digits
+    return f"LUCS-{''.join(random.choices(chars, k=4))}-{''.join(random.choices(chars, k=4))}"
 
-# 2. SEU LAYOUT AZUL COM OS ACRÉSCIMOS DE LOGS
-PAINEL_HTML = """
+# O LAYOUT AZUL QUE VOCÊ GOSTOU
+HTML_AZUL = """
 <!DOCTYPE html>
 <html lang="pt-BR">
 <head>
-    <meta charset="utf-8" />
+    <meta charset="utf-8">
     <title>CyberAdmin | Lucs Tech</title>
     <style>
-        :root { --bg: #050a14; --accent: #00d2ff; --card: rgba(10, 20, 40, 0.9); --text: #e0f2ff; --muted: #6a89a7; --red: #ff3c3c; --green: #00ffaa; }
-        body { background: radial-gradient(circle at top, #0a1931 0%, #050a14 100%); color: var(--text); font-family: 'Segoe UI', sans-serif; padding: 20px; margin: 0; }
-        .container { max-width: 1100px; margin: auto; }
-        .stats-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 15px; margin-bottom: 25px; }
-        .stat-card { background: var(--card); border: 1px solid rgba(0, 210, 255, 0.1); border-radius: 12px; padding: 15px; text-align: center; }
-        .stat-num { font-size: 24px; font-weight: bold; color: var(--accent); display: block; }
-        .panel { background: var(--card); border: 1px solid rgba(0, 210, 255, 0.2); border-radius: 15px; padding: 20px; margin-bottom: 25px; }
-        .grid-inputs { display: grid; grid-template-columns: 2fr 2fr 100px auto; gap: 10px; }
-        input { background: rgba(0, 0, 0, 0.5); border: 1px solid rgba(0, 210, 255, 0.3); padding: 10px; border-radius: 8px; color: #fff; outline: none; }
-        .btn-main { background: linear-gradient(90deg, #00d2ff, #3a7bd5); color: #fff; border-radius: 8px; font-weight: bold; padding: 10px; border: none; cursor: pointer; }
-        table { width: 100%; border-collapse: collapse; font-size: 13px; }
-        th { text-align: left; color: var(--muted); padding: 10px; border-bottom: 1px solid rgba(0, 210, 255, 0.2); }
-        td { padding: 12px 10px; border-bottom: 1px solid rgba(255, 255, 255, 0.03); }
-        .chave-box { color: #ffd166; background: rgba(255, 209, 102, 0.1); padding: 4px 8px; border-radius: 5px; cursor: pointer; font-family: monospace; border: 1px solid rgba(255, 209, 102, 0.2); }
-        .badge { padding: 4px 8px; border-radius: 10px; font-size: 10px; font-weight: bold; border: none; cursor: pointer; }
-        .badge-on { background: var(--green); color: #000; }
-        .badge-off { background: var(--red); color: #fff; }
-        .logs-box { background: rgba(0,0,0,0.5); border-radius: 10px; padding: 15px; max-height: 200px; overflow-y: auto; font-family: monospace; font-size: 11px; color: #88c0d0; }
+        :root { 
+            --bg: #050a14; --accent: #00d2ff; --card: rgba(10, 20, 40, 0.9); 
+            --text: #e0f2ff; --muted: #6a89a7; --green: #00ffaa; --red: #ff3c3c;
+        }
+        body { 
+            background: radial-gradient(circle at top, #0a1931 0%, #050a14 100%); 
+            color: var(--text); font-family: 'Segoe UI', sans-serif; padding: 25px; margin: 0;
+        }
+        .container { max-width: 1000px; margin: auto; }
+        .header { border-bottom: 1px solid rgba(0, 210, 255, 0.3); padding-bottom: 15px; margin-bottom: 25px; }
+        .panel { 
+            background: var(--card); border: 1px solid rgba(0, 210, 255, 0.2); 
+            border-radius: 15px; padding: 20px; backdrop-filter: blur(10px); box-shadow: 0 0 20px rgba(0,0,0,0.5);
+        }
+        .grid-form { display: grid; grid-template-columns: 1fr 1fr 120px auto; gap: 10px; margin-bottom: 20px; }
+        input { 
+            background: rgba(0,0,0,0.4); border: 1px solid rgba(0, 210, 255, 0.3); 
+            padding: 12px; border-radius: 8px; color: #fff; outline: none;
+        }
+        .btn-gen { 
+            background: linear-gradient(90deg, #00d2ff, #3a7bd5); color: white; 
+            border: none; border-radius: 8px; padding: 12px 20px; font-weight: bold; cursor: pointer;
+        }
+        table { width: 100%; border-collapse: collapse; margin-top: 20px; }
+        th { text-align: left; color: var(--muted); font-size: 12px; padding: 10px; border-bottom: 1px solid rgba(0,210,255,0.1); }
+        td { padding: 15px 10px; border-bottom: 1px solid rgba(255,255,255,0.05); }
+        .key { color: var(--accent); font-family: monospace; font-weight: bold; background: rgba(0,210,255,0.1); padding: 4px 8px; border-radius: 4px; }
+        .status-on { color: var(--green); }
+        .status-off { color: var(--red); }
     </style>
 </head>
 <body>
     <div class="container">
-        <h1 style="color:var(--accent); text-transform:uppercase; font-size:20px; margin-bottom:20px;">⚡ Painel de Controle</h1>
-
-        <div class="stats-grid">
-            <div class="stat-card"><span class="stat-num" id="s-total">0</span><span style="font-size:10px; color:var(--muted)">TOTAL</span></div>
-            <div class="stat-card"><span class="stat-num" id="s-ativos" style="color:var(--green)">0</span><span style="font-size:10px; color:var(--muted)">ATIVOS</span></div>
-            <div class="stat-card"><span class="stat-num" id="s-bloq" style="color:var(--red)">0</span><span style="font-size:10px; color:var(--muted)">BLOQUEADOS</span></div>
-            <div class="stat-card"><span class="stat-num" id="s-hoje">0</span><span style="font-size:10px; color:var(--muted)">LOGINS HOJE</span></div>
+        <div class="header">
+            <h1 style="margin:0; font-size:24px; color:var(--accent); text-shadow: 0 0 10px var(--accent);">⚡ CYBER-ADMIN v1.0</h1>
         </div>
 
         <div class="panel">
-            <div class="grid-inputs">
+            <div class="grid-form">
                 <input type="text" id="nome" placeholder="Nome do Cliente">
-                <input type="email" id="email" placeholder="E-mail">
+                <input type="text" id="email" placeholder="E-mail (Opcional)">
                 <input type="number" id="dias" value="30">
-                <button class="btn-main" onclick="criar()">GERAR ACESSO</button>
+                <button class="btn-gen" onclick="gerar()">GERAR CHAVE</button>
             </div>
-        </div>
 
-        <div class="panel">
             <table>
-                <thead><tr><th>CLIENTE</th><th>CHAVE</th><th>VENCIMENTO</th><th>STATUS</th><th>AÇÃO</th></tr></thead>
-                <tbody id="tabela"></tbody>
+                <thead>
+                    <tr><th>CLIENTE</th><th>CHAVE SERIAL</th><th>VENCIMENTO</th><th>STATUS</th></tr>
+                </thead>
+                <tbody id="lista"></tbody>
             </table>
-        </div>
-
-        <div class="panel">
-            <h3 style="font-size:12px; color:var(--accent); margin-bottom:10px;">HISTÓRICO DE ACESSOS RECENTES</h3>
-            <div class="logs-box" id="logs">Carregando logs...</div>
         </div>
     </div>
 
     <script>
         async function carregar() {
-            const res = await fetch('/admin/dados');
-            const d = await res.json();
-            document.getElementById('s-total').innerText = d.usuarios.length;
-            document.getElementById('s-ativos').innerText = d.usuarios.filter(u => u.ativo).length;
-            document.getElementById('s-bloq').innerText = d.usuarios.filter(u => !u.ativo).length;
-            document.getElementById('s-hoje').innerText = d.logs_hoje;
-
-            document.getElementById('tabela').innerHTML = d.usuarios.map(u => `
+            const r = await fetch('/admin/lista');
+            const dados = await r.json();
+            document.getElementById('lista').innerHTML = dados.map(u => `
                 <tr>
-                    <td><b>${u.nome}</b><br><small style="color:var(--muted)">${u.email||''}</small></td>
-                    <td><span class="chave-box" onclick="navigator.clipboard.writeText('${u.chave}');alert('Copiado!')">${u.chave}</span></td>
-                    <td>${u.expira ? new Date(u.expira).toLocaleDateString() : '--'}</td>
-                    <td><button class="badge ${u.ativo?'badge-on':'badge-off'}" onclick="toggle('${u.chave}')">${u.ativo?'ATIVO':'BLOQUEADO'}</button></td>
-                    <td><button onclick="deletar('${u.chave}')" style="background:none;border:none;color:var(--red);cursor:pointer">Remover</button></td>
+                    <td>${u.nome}</td>
+                    <td><span class="key">${u.chave}</span></td>
+                    <td>${u.expira ? new Date(u.expira).toLocaleDateString() : 'VITALÍCIO'}</td>
+                    <td class="${u.ativo ? 'status-on' : 'status-off'}">${u.ativo ? '● ATIVO' : '● BLOQUEADO'}</td>
                 </tr>
             `).join('');
+        }
 
-            document.getElementById('logs').innerHTML = d.logs.map(l => `<div>[${new Date(l.momento).toLocaleString()}] ${l.sucesso?'✅':'❌'} CHAVE: ${l.chave}</div>`).join('');
+        async function gerar() {
+            const nome = document.getElementById('nome').value;
+            const dias = document.getElementById('dias').value;
+            if(!nome) return alert('Digite o nome!');
+            await fetch('/admin/novo', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({nome, dias})
+            });
+            carregar();
         }
-        async function criar() {
-            const nome=document.getElementById('nome').value; const email=document.getElementById('email').value; const dias=document.getElementById('dias').value;
-            if(!nome) return alert('Nome obrigatório');
-            const res = await fetch('/admin/criar-auto', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({nome, email, dias}) });
-            if(res.ok) { const data = await res.json(); alert('Gerado: ' + data.chave); carregar(); }
-        }
-        async function toggle(chave) { await fetch('/admin/toggle', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({chave})}); carregar(); }
-        async function deletar(chave) { if(confirm('Excluir?')) { await fetch('/admin/deletar', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({chave})}); carregar(); } }
-        carregar(); setInterval(carregar, 15000);
+        carregar();
     </script>
 </body>
 </html>
 """
 
-# --- ROTAS (PRESERVANDO OS ENDEREÇOS) ---
 @app.route("/")
-@app.route("/admin-sistema") # Se você usava esse endereço, ele continua funcionando
 def index():
-    return render_template_string(PAINEL_HTML)
+    return render_template_string(HTML_AZUL)
 
 @app.route("/api/validar", methods=["POST"])
 def validar():
-    dados = request.json or {}
-    chave = dados.get("chave", "").strip()
+    chave = request.json.get("chave")
     conn = get_db(); cur = conn.cursor()
     cur.execute("SELECT nome, ativo, expira FROM usuarios WHERE chave = %s", (chave,))
-    user = cur.fetchone()
-    sucesso = 0
-    if user:
-        vencido = user['expira'] and user['expira'] < datetime.now().date()
-        if user['ativo'] and not vencido: sucesso = 1
-    cur.execute("INSERT INTO logs (chave, sucesso, momento) VALUES (%s, %s, %s)", (chave, sucesso, datetime.now()))
-    conn.commit(); cur.close(); conn.close()
-    if sucesso: return jsonify({"ok": True, "nome": user['nome']})
-    return jsonify({"ok": False, "msg": "Negado"}), 403
+    u = cur.fetchone()
+    cur.close(); conn.close()
+    
+    if u and u['ativo']:
+        if u['expira'] and u['expira'] < datetime.now().date():
+            return jsonify({"ok": False, "msg": "Expirada"}), 403
+        return jsonify({"ok": True, "nome": u['nome']})
+    return jsonify({"ok": False, "msg": "Invalida"}), 403
 
-@app.route("/admin/dados")
-def admin_dados():
+@app.route("/admin/lista")
+def lista():
     conn = get_db(); cur = conn.cursor()
     cur.execute("SELECT * FROM usuarios ORDER BY id DESC")
-    u = cur.fetchall()
-    cur.execute("SELECT * FROM logs ORDER BY id DESC LIMIT 30")
-    l = cur.fetchall()
-    cur.execute("SELECT COUNT(*) FROM logs WHERE momento::date = CURRENT_DATE AND sucesso = 1")
-    h = cur.fetchone()['count']
+    users = cur.fetchall()
     cur.close(); conn.close()
-    return jsonify({"usuarios": u, "logs": l, "logs_hoje": h})
+    return jsonify(users)
 
-@app.route("/admin/criar-auto", methods=["POST"])
-def criar_auto():
+@app.route("/admin/novo", methods=["POST"])
+def novo():
     d = request.json
-    chave = gerar_chave_automatica()
-    exp = datetime.now().date() + timedelta(days=int(d.get('dias', 30)))
+    chave = gerar_serial()
+    exp = datetime.now().date() + timedelta(days=int(d['dias']))
     conn = get_db(); cur = conn.cursor()
-    cur.execute("INSERT INTO usuarios (nome, email, chave, expira, ativo) VALUES (%s, %s, %s, %s, True)", (d['nome'], d.get('email'), chave, exp))
-    conn.commit(); cur.close(); conn.close()
-    return jsonify({"ok": True, "chave": chave})
-
-@app.route("/admin/toggle", methods=["POST"])
-def admin_toggle():
-    chave = request.json.get('chave')
-    conn = get_db(); cur = conn.cursor()
-    cur.execute("UPDATE usuarios SET ativo = NOT ativo WHERE chave = %s", (chave,))
-    conn.commit(); cur.close(); conn.close()
-    return jsonify({"ok": True})
-
-@app.route("/admin/deletar", methods=["POST"])
-def admin_deletar():
-    chave = request.json.get('chave')
-    conn = get_db(); cur = conn.cursor()
-    cur.execute("DELETE FROM usuarios WHERE chave = %s", (chave,))
+    cur.execute("INSERT INTO usuarios (nome, chave, expira, ativo) VALUES (%s, %s, %s, True)", (d['nome'], chave, exp))
     conn.commit(); cur.close(); conn.close()
     return jsonify({"ok": True})
 
@@ -179,10 +150,7 @@ def admin_deletar():
 def setup():
     if not hasattr(app, 'init_done'):
         conn = get_db(); cur = conn.cursor()
-        cur.execute("""
-            CREATE TABLE IF NOT EXISTS usuarios (id SERIAL PRIMARY KEY, nome TEXT, email TEXT, chave TEXT UNIQUE, ativo BOOLEAN DEFAULT TRUE, expira DATE);
-            CREATE TABLE IF NOT EXISTS logs (id SERIAL PRIMARY KEY, chave TEXT, sucesso INTEGER, momento TIMESTAMP);
-        """)
+        cur.execute("CREATE TABLE IF NOT EXISTS usuarios (id SERIAL PRIMARY KEY, nome TEXT, chave TEXT UNIQUE, expira DATE, ativo BOOLEAN DEFAULT TRUE)")
         conn.commit(); cur.close(); conn.close()
         app.init_done = True
 
