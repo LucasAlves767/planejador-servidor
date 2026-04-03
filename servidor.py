@@ -5,47 +5,93 @@ import os
 
 app = Flask(__name__)
 
-# 1. BANCO DE DADOS
+# 1. CONEXÃO BANCO
 DATABASE_URL = os.environ.get("DATABASE_URL", "").replace("postgres://", "postgresql://", 1)
 
 def get_db():
     return psycopg2.connect(DATABASE_URL, cursor_factory=psycopg2.extras.RealDictCursor)
 
-# 2. LAYOUT DO PAINEL (DESIGN BRUNA/LUCS)
+# 2. PAINEL AZUL FUTURISTA
 PAINEL_HTML = """
 <!DOCTYPE html>
 <html lang="pt-BR">
 <head>
     <meta charset="utf-8" />
-    <title>Admin Lucs | Gestão de Licenças</title>
+    <title>CyberAdmin | Gestão de Licenças</title>
     <style>
-        :root { --bg: #042017; --accent: #29ff9a; --card: rgba(255,255,255,0.03); --text: #e8f7f1; }
-        body { background: #042017; color: var(--text); font-family: 'Segoe UI', sans-serif; padding: 20px; margin: 0; }
-        .container { max-width: 1000px; margin: auto; }
-        .panel { background: var(--card); border: 1px solid rgba(255,255,255,0.05); border-radius: 15px; padding: 20px; backdrop-filter: blur(10px); }
-        h1 { color: var(--accent); margin-bottom: 5px; }
-        .grid-inputs { display: grid; grid-template-columns: 1fr 1fr 100px auto; gap: 10px; margin-bottom: 20px; }
-        input { background: #000; border: 1px solid #333; padding: 12px; border-radius: 8px; color: #fff; }
-        button { cursor: pointer; border-radius: 8px; font-weight: bold; padding: 10px 20px; border: none; }
-        .btn-main { background: var(--accent); color: #012216; }
-        .btn-status { padding: 5px 10px; font-size: 11px; }
-        .on { background: #2ecc71; color: #fff; }
-        .off { background: #e74c3c; color: #fff; }
+        :root { 
+            --bg: #050a14; 
+            --accent: #00d2ff; 
+            --accent-glow: #0084ff;
+            --card: rgba(10, 20, 40, 0.8); 
+            --text: #e0f2ff; 
+            --muted: #6a89a7;
+        }
+        body { 
+            background: radial-gradient(circle at top, #0a1931 0%, #050a14 100%); 
+            color: var(--text); 
+            font-family: 'Segoe UI', system-ui, sans-serif; 
+            padding: 30px; margin: 0; min-height: 100vh;
+        }
+        .container { max-width: 1100px; margin: auto; }
+        .panel { 
+            background: var(--card); 
+            border: 1px solid rgba(0, 210, 255, 0.2); 
+            border-radius: 20px; padding: 25px; 
+            backdrop-filter: blur(15px);
+            box-shadow: 0 0 30px rgba(0, 132, 255, 0.1);
+        }
+        h1 { 
+            color: var(--accent); 
+            text-transform: uppercase; letter-spacing: 2px;
+            text-shadow: 0 0 15px var(--accent-glow);
+            margin-bottom: 5px;
+        }
+        .grid-inputs { 
+            display: grid; 
+            grid-template-columns: 1.5fr 1.5fr 1.5fr 80px auto; 
+            gap: 12px; margin-bottom: 25px; 
+        }
+        input { 
+            background: rgba(0, 0, 0, 0.4); 
+            border: 1px solid rgba(0, 210, 255, 0.3); 
+            padding: 12px; border-radius: 10px; color: #fff;
+            transition: 0.3s;
+        }
+        input:focus { border-color: var(--accent); outline: none; box-shadow: 0 0 10px var(--accent-glow); }
+        
+        .btn-main { 
+            background: linear-gradient(90deg, #00d2ff, #3a7bd5); 
+            color: #fff; border-radius: 10px; font-weight: bold; 
+            padding: 10px 20px; border: none; cursor: pointer;
+            box-shadow: 0 0 15px rgba(0, 210, 255, 0.4);
+            transition: 0.3s;
+        }
+        .btn-main:hover { transform: scale(1.02); box-shadow: 0 0 25px var(--accent-glow); }
+
+        .btn-status { 
+            padding: 6px 12px; font-size: 11px; border-radius: 20px; border: none; font-weight: 800; cursor: pointer;
+        }
+        .on { background: rgba(0, 210, 255, 0.2); color: #00d2ff; border: 1px solid #00d2ff; }
+        .off { background: rgba(255, 60, 60, 0.1); color: #ff3c3c; border: 1px solid #ff3c3c; }
+
         table { width: 100%; border-collapse: collapse; margin-top: 15px; }
-        th { text-align: left; color: #9aa6a6; font-size: 12px; padding: 10px; border-bottom: 1px solid #222; }
-        td { padding: 12px 10px; border-bottom: 1px solid rgba(255,255,255,0.03); font-size: 14px; }
-        code { color: var(--accent); background: rgba(0,0,0,0.3); padding: 3px 6px; border-radius: 4px; }
+        th { text-align: left; color: var(--muted); font-size: 12px; padding: 12px; border-bottom: 2px solid rgba(0, 210, 255, 0.1); }
+        td { padding: 15px 12px; border-bottom: 1px solid rgba(255, 255, 255, 0.03); font-size: 14px; }
+        code { color: #fff; background: rgba(0, 210, 255, 0.2); padding: 4px 8px; border-radius: 5px; border: 1px solid rgba(0, 210, 255, 0.3); }
+        .email-text { color: var(--muted); font-size: 13px; }
     </style>
 </head>
 <body>
     <div class="container">
-        <h1>Gerenciador Lucs</h1>
-        <p style="color:#9aa6a6; margin-bottom:20px;">Controle de acessos, logs e expiração de licenças.</p>
+        <h1>Protocolo de Licenças — Lucs</h1>
+        <p style="color:var(--muted); margin-bottom:25px;">Interface de Gerenciamento Neon v3.0</p>
         
         <div class="panel">
             <div class="grid-inputs">
-                <input type="text" id="nome" placeholder="Cliente">
-                <input type="text" id="chave" placeholder="Chave">
+                <input type="text" id="nome" placeholder="Nome do Cliente">
+                <input type="email" id="email" placeholder="E-mail">
+                <input type="text" id="chave" placeholder="Chave de Acesso">
                 <input type="number" id="dias" placeholder="Dias" value="30">
                 <button class="btn-main" onclick="criar()">GERAR ACESSO</button>
             </div>
@@ -53,12 +99,12 @@ PAINEL_HTML = """
             <table>
                 <thead>
                     <tr>
-                        <th>CLIENTE</th>
-                        <th>CHAVE</th>
+                        <th>USUÁRIO / E-MAIL</th>
+                        <th>CHAVE NEON</th>
                         <th>VENCIMENTO</th>
-                        <th>ÚLTIMO ACESSO</th>
+                        <th>ÚLTIMO LOGIN</th>
                         <th>STATUS</th>
-                        <th>AÇÃO</th>
+                        <th>SISTEMA</th>
                     </tr>
                 </thead>
                 <tbody id="tabela"></tbody>
@@ -72,43 +118,45 @@ PAINEL_HTML = """
             const dados = await r.json();
             document.getElementById('tabela').innerHTML = dados.map(u => `
                 <tr>
-                    <td><b>${u.nome}</b></td>
+                    <td>
+                        <b>${u.nome}</b><br>
+                        <span class="email-text">${u.email || 'N/A'}</span>
+                    </td>
                     <td><code>${u.chave}</code></td>
-                    <td>${u.expira ? new Date(u.expira).toLocaleDateString() : 'Vitalício'}</td>
-                    <td style="color:#9aa6a6">${u.ultimo_acesso ? new Date(u.ultimo_acesso).toLocaleString() : 'Nunca'}</td>
+                    <td>${u.expira ? new Date(u.expira).toLocaleDateString() : 'VITALÍCIO'}</td>
+                    <td style="color:var(--muted)">${u.ultimo_acesso ? new Date(u.ultimo_acesso).toLocaleString() : '--/--'}</td>
                     <td>
                         <button class="btn-status ${u.ativo ? 'on' : 'off'}" onclick="toggle('${u.chave}')">
                             ${u.ativo ? 'ATIVO' : 'BLOQUEADO'}
                         </button>
                     </td>
-                    <td><button onclick="deletar('${u.chave}')" style="background:none; color:#ff5f6d; cursor:pointer; border:none;">Excluir</button></td>
+                    <td><button onclick="deletar('${u.chave}')" style="background:none; color:#ff3c3c; cursor:pointer; border:none; font-size:12px;">[REMOVER]</button></td>
                 </tr>
             `).join('');
         }
 
         async function criar() {
             const nome = document.getElementById('nome').value;
+            const email = document.getElementById('email').value;
             const chave = document.getElementById('chave').value;
             const dias = document.getElementById('dias').value;
+            if(!nome || !chave) return alert('Campos obrigatórios!');
+            
             await fetch('/admin/criar', {
                 method: 'POST',
                 headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({nome, chave, dias})
+                body: JSON.stringify({nome, email, chave, dias})
             });
             carregar();
         }
 
         async function toggle(chave) {
-            await fetch('/admin/toggle', {
-                method: 'POST',
-                headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({chave})
-            });
+            await fetch('/admin/toggle', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({chave}) });
             carregar();
         }
 
         async function deletar(chave) {
-            if(confirm('Apagar chave?')) {
+            if(confirm('Terminar acesso permanentemente?')) {
                 await fetch('/admin/deletar', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({chave}) });
                 carregar();
             }
@@ -119,10 +167,11 @@ PAINEL_HTML = """
 </html>
 """
 
-# 3. ROTAS LOGIC
+# 3. ROTAS E LÓGICA (Mantidas para o seu EXE funcionar)
+
 @app.route("/")
 def home():
-    return send_file('planejador.html') if os.path.exists('planejador.html') else "Servidor ON"
+    return send_file('planejador.html') if os.path.exists('planejador.html') else "System Online"
 
 @app.route("/admin-sistema")
 def admin():
@@ -135,34 +184,31 @@ def validar():
     conn = get_db()
     cur = conn.cursor()
     
-    # Busca chave e verifica se está ativa e se não venceu
     cur.execute("SELECT nome, ativo, expira FROM usuarios WHERE chave = %s", (chave,))
     user = cur.fetchone()
     
     if user:
-        # Verifica expiração
         vencido = False
         if user['expira'] and user['expira'] < datetime.now().date():
             vencido = True
         
         if user['ativo'] and not vencido:
-            # REGISTRA O LOG DE ACESSO (HORA QUE ABRIU O EXE)
+            # LOG DE ACESSO
             cur.execute("UPDATE usuarios SET ultimo_acesso = %s WHERE chave = %s", (datetime.now(), chave))
             conn.commit()
             return jsonify({"ok": True, "nome": user['nome']})
         
-        msg = "Licença Vencida" if vencido else "Acesso Bloqueado pelo Administrador"
+        msg = "Licença Expirada" if vencido else "Acesso Revogado"
         return jsonify({"ok": False, "msg": msg}), 403
     
-    return jsonify({"ok": False, "msg": "Chave Inexistente"}), 401
+    return jsonify({"ok": False, "msg": "Chave Inválida"}), 401
 
 @app.route("/admin/dados")
 def admin_dados():
     conn = get_db()
     cur = conn.cursor()
-    cur.execute("SELECT nome, chave, ativo, expira, ultimo_acesso FROM usuarios ORDER BY id DESC")
-    res = cur.fetchall()
-    return jsonify(res)
+    cur.execute("SELECT nome, email, chave, ativo, expira, ultimo_acesso FROM usuarios ORDER BY id DESC")
+    return jsonify(cur.fetchall())
 
 @app.route("/admin/criar", methods=["POST"])
 def admin_criar():
@@ -170,7 +216,8 @@ def admin_criar():
     vencimento = datetime.now().date() + timedelta(days=int(d['dias']))
     conn = get_db()
     cur = conn.cursor()
-    cur.execute("INSERT INTO usuarios (nome, chave, expira, ativo) VALUES (%s, %s, %s, True)", (d['nome'], d['chave'], vencimento))
+    cur.execute("INSERT INTO usuarios (nome, email, chave, expira, ativo) VALUES (%s, %s, %s, %s, True)", 
+                (d['nome'], d.get('email'), d['chave'], vencimento))
     conn.commit()
     return jsonify({"ok": True})
 
@@ -197,11 +244,12 @@ def setup():
     if not hasattr(app, 'init'):
         conn = get_db()
         cur = conn.cursor()
-        # CRIA A TABELA COM TODAS AS COLUNAS NOVAS
+        # Garante a coluna EMAIL caso não exista
         cur.execute("""
             CREATE TABLE IF NOT EXISTS usuarios (
                 id SERIAL PRIMARY KEY,
                 nome TEXT,
+                email TEXT,
                 chave TEXT UNIQUE,
                 ativo BOOLEAN DEFAULT TRUE,
                 expira DATE,
