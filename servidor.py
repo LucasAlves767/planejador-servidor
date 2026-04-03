@@ -119,7 +119,7 @@ HTML = r"""<!DOCTYPE html>
   --surf:  #071525;
   --card:  #0a1e30;
   --bord:  rgba(0,200,255,.12);
-  --c1:    #00cfff;
+  --c1:    #ff6600;
   --c2:    #005bcc;
   --text:  #cce8f4;
   --muted: #4a7a99;
