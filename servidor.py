@@ -393,98 +393,30 @@ def pagina_dm():
 def admin_sistema():
     return redirect("/app")
 
-@app.route("/api/validar", methods=["POST"])
-def validar():
-    dados = request.json or {}
-    chave = dados.get("chave", "").strip()
-    conn = get_db(); cur = conn.cursor()
-    cur.execute("SELECT nome, ativo, expira FROM usuarios WHERE chave = %s", (chave,))
-    user = cur.fetchone()
-    sucesso = 0
-    if user:
-        vencido = user['expira'] and user['expira'] < datetime.now().date()
-        if user['ativo'] and not vencido:
-            sucesso = 1
-    cur.execute("INSERT INTO logs (chave, sucesso, momento) VALUES (%s, %s, %s)", (chave, sucesso, datetime.now()))
-    conn.commit(); cur.close(); conn.close()
-    if sucesso:
-        return jsonify({"ok": True, "nome": user['nome']})
-    return jsonify({"ok": False, "msg": "Negado"}), 403
+# ─────────────────────────────────────────────
+#  HELPERS
+# ─────────────────────────────────────────────
+def serializar(row):
+    """Converte um RealDictRow em dict serializável para JSON.
+    Python 3.14 + psycopg2 pode retornar datas já como string — protege contra isso."""
+    r = dict(row)
+    for k, v in r.items():
+        if v is None or isinstance(v, (str, int, float, bool)):
+            pass  # já serializável
+        elif hasattr(v, 'isoformat'):  # date / datetime ainda como objeto
+            r[k] = v.isoformat()
+        else:
+            r[k] = str(v)  # fallback seguro
+    return r
 
-@app.route("/admin/dados")
-def admin_dados():
-    conn = get_db(); cur = conn.cursor()
-    cur.execute("SELECT * FROM usuarios ORDER BY id DESC")
-    u = cur.fetchall()
-    cur.execute("SELECT * FROM logs ORDER BY id DESC LIMIT 30")
-    l = cur.fetchall()
-    cur.execute("SELECT COUNT(*) FROM logs WHERE momento::date = CURRENT_DATE AND sucesso = 1")
-    h = cur.fetchone()['count']
-    cur.close(); conn.close()
-    # Converter dates para string para evitar erro de serialização JSON
-    usuarios = []
-    for row in u:
-        r = dict(row)
-        if r.get('expira'):
-            r['expira'] = r['expira'].isoformat()
-        usuarios.append(r)
-    logs = [dict(row) for row in l]
-    for log in logs:
-        if log.get('momento'):
-            log['momento'] = log['momento'].isoformat()
-    return jsonify({"usuarios": usuarios, "logs": logs, "logs_hoje": h})
+def erro_json(msg, code=500):
+    return jsonify({"ok": False, "msg": str(msg)}), code
 
-@app.route("/admin/criar-auto", methods=["POST"])
-def criar_auto():
-    d = request.json
-    nome = d.get('nome', '').strip()
-    if not nome:
-        return jsonify({"ok": False, "msg": "Nome obrigatório"}), 400
-    chave = gerar_chave_automatica()
-    dias = int(d.get('dias', 30))
-    exp = datetime.now().date() + timedelta(days=dias)
-    conn = get_db(); cur = conn.cursor()
-    # Evita chave duplicada (tenta até 5 vezes)
-    for _ in range(5):
-        try:
-            cur.execute(
-                "INSERT INTO usuarios (nome, email, chave, expira, ativo) VALUES (%s, %s, %s, %s, True)",
-                (nome, d.get('email'), chave, exp)
-            )
-            conn.commit()
-            break
-        except psycopg2.errors.UniqueViolation:
-            conn.rollback()
-            chave = gerar_chave_automatica()
-    cur.close(); conn.close()
-    return jsonify({"ok": True, "chave": chave})
-
-@app.route("/admin/toggle", methods=["POST"])
-def admin_toggle():
-    chave = request.json.get('chave')
-    conn = get_db(); cur = conn.cursor()
-    cur.execute("UPDATE usuarios SET ativo = NOT ativo WHERE chave = %s", (chave,))
-    conn.commit(); cur.close(); conn.close()
-    return jsonify({"ok": True})
-
-@app.route("/admin/deletar", methods=["POST"])
-def admin_deletar():
-    chave = request.json.get('chave')
-    conn = get_db(); cur = conn.cursor()
-    cur.execute("DELETE FROM usuarios WHERE chave = %s", (chave,))
-    conn.commit(); cur.close(); conn.close()
-    return jsonify({"ok": True})
-
-@app.route("/admin/bloquear-todos", methods=["POST"])
-def bloquear_todos():
-    conn = get_db(); cur = conn.cursor()
-    cur.execute("UPDATE usuarios SET ativo = False WHERE ativo = True")
-    conn.commit(); cur.close(); conn.close()
-    return jsonify({"ok": True})
-
-@app.before_request
-def setup():
-    if not hasattr(app, 'init_done'):
+# ─────────────────────────────────────────────
+#  INICIALIZAÇÃO DO BANCO (uma só vez)
+# ─────────────────────────────────────────────
+def init_db():
+    try:
         conn = get_db(); cur = conn.cursor()
         cur.execute("""
             CREATE TABLE IF NOT EXISTS usuarios (
@@ -503,7 +435,128 @@ def setup():
             );
         """)
         conn.commit(); cur.close(); conn.close()
-        app.init_done = True
+        print("[DB] Tabelas OK")
+    except Exception as e:
+        print(f"[DB] ERRO ao inicializar: {e}")
+
+# Roda ao importar (funciona no Gunicorn/Render)
+with app.app_context():
+    init_db()
+
+# ─────────────────────────────────────────────
+#  ROTAS API
+# ─────────────────────────────────────────────
+@app.route("/api/validar", methods=["POST"])
+def validar():
+    try:
+        dados = request.json or {}
+        chave = dados.get("chave", "").strip()
+        conn = get_db(); cur = conn.cursor()
+        cur.execute("SELECT nome, ativo, expira FROM usuarios WHERE chave = %s", (chave,))
+        user = cur.fetchone()
+        sucesso = 0
+        if user:
+            vencido = user['expira'] and user['expira'] < datetime.now().date()
+            if user['ativo'] and not vencido:
+                sucesso = 1
+        cur.execute("INSERT INTO logs (chave, sucesso, momento) VALUES (%s, %s, %s)",
+                    (chave, sucesso, datetime.now()))
+        conn.commit(); cur.close(); conn.close()
+        if sucesso:
+            return jsonify({"ok": True, "nome": user['nome']})
+        return jsonify({"ok": False, "msg": "Negado"}), 403
+    except Exception as e:
+        print(f"[validar] ERRO: {e}")
+        return erro_json(e)
+
+@app.route("/admin/dados")
+def admin_dados():
+    try:
+        conn = get_db(); cur = conn.cursor()
+        cur.execute("SELECT * FROM usuarios ORDER BY id DESC")
+        usuarios = [serializar(r) for r in cur.fetchall()]
+        cur.execute("SELECT * FROM logs ORDER BY id DESC LIMIT 50")
+        logs = [serializar(r) for r in cur.fetchall()]
+        cur.execute("SELECT COUNT(*) as total FROM logs WHERE momento::date = CURRENT_DATE AND sucesso = 1")
+        hoje = cur.fetchone()['total']
+        cur.close(); conn.close()
+        return jsonify({"usuarios": usuarios, "logs": logs, "logs_hoje": hoje})
+    except Exception as e:
+        print(f"[admin_dados] ERRO: {e}")
+        return erro_json(e)
+
+@app.route("/admin/criar-auto", methods=["POST"])
+def criar_auto():
+    try:
+        d = request.json or {}
+        nome = d.get('nome', '').strip()
+        if not nome:
+            return erro_json("Nome obrigatório", 400)
+        email = d.get('email', '').strip() or None
+        dias = int(d.get('dias') or 30)
+        exp = datetime.now().date() + timedelta(days=dias)
+        conn = get_db(); cur = conn.cursor()
+        chave = gerar_chave_automatica()
+        for tentativa in range(10):
+            try:
+                cur.execute(
+                    "INSERT INTO usuarios (nome, email, chave, expira, ativo) VALUES (%s,%s,%s,%s,True) RETURNING chave",
+                    (nome, email, chave, exp)
+                )
+                chave = cur.fetchone()['chave']
+                conn.commit()
+                break
+            except psycopg2.errors.UniqueViolation:
+                conn.rollback()
+                chave = gerar_chave_automatica()
+        else:
+            cur.close(); conn.close()
+            return erro_json("Não foi possível gerar chave única", 500)
+        cur.close(); conn.close()
+        return jsonify({"ok": True, "chave": chave})
+    except Exception as e:
+        print(f"[criar_auto] ERRO: {e}")
+        return erro_json(e)
+
+@app.route("/admin/toggle", methods=["POST"])
+def admin_toggle():
+    try:
+        chave = (request.json or {}).get('chave')
+        if not chave:
+            return erro_json("Chave não informada", 400)
+        conn = get_db(); cur = conn.cursor()
+        cur.execute("UPDATE usuarios SET ativo = NOT ativo WHERE chave = %s", (chave,))
+        conn.commit(); cur.close(); conn.close()
+        return jsonify({"ok": True})
+    except Exception as e:
+        print(f"[toggle] ERRO: {e}")
+        return erro_json(e)
+
+@app.route("/admin/deletar", methods=["POST"])
+def admin_deletar():
+    try:
+        chave = (request.json or {}).get('chave')
+        if not chave:
+            return erro_json("Chave não informada", 400)
+        conn = get_db(); cur = conn.cursor()
+        cur.execute("DELETE FROM logs WHERE chave = %s", (chave,))
+        cur.execute("DELETE FROM usuarios WHERE chave = %s", (chave,))
+        conn.commit(); cur.close(); conn.close()
+        return jsonify({"ok": True})
+    except Exception as e:
+        print(f"[deletar] ERRO: {e}")
+        return erro_json(e)
+
+@app.route("/admin/bloquear-todos", methods=["POST"])
+def bloquear_todos():
+    try:
+        conn = get_db(); cur = conn.cursor()
+        cur.execute("UPDATE usuarios SET ativo = False WHERE ativo = True")
+        conn.commit(); cur.close(); conn.close()
+        return jsonify({"ok": True})
+    except Exception as e:
+        print(f"[bloquear_todos] ERRO: {e}")
+        return erro_json(e)
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=10000)
