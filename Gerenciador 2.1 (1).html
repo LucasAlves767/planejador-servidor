@@ -1,0 +1,1948 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>Planejador Lucs — Bruna</title>
+
+<style>
+
+  :root{
+    --bg-a: #042017;
+    --bg-b: #063426;
+    --bg-c: #0b2f22;
+    --card: rgba(18,25,28,0.86);
+    --glass: rgba(255,255,255,0.03);
+    --accent-start: #29ff9a;
+    --accent-end: #66ffb0;
+    --muted: #9aa6a6;
+    --font-s: 14px;
+    --title-size: 18px;
+    --text-color: #e8f7f1;
+    --title-color: var(--accent-start);
+    --radius: 12px;
+    --page-bg: linear-gradient(135deg, var(--bg-a) 0%, var(--bg-b) 45%, var(--bg-c) 100%);
+
+/* Variáveis novas para status e cores principais */
+--color-primary: #42b983;
+--color-secondary: #063426;
+--color-overdue: #e74c3c;
+--color-complete: #2ecc71;
+--bg-main: #042017;
+--bg-card: #063426;
+--text-main: #fff;
+--transition: all 0.3s;
+
+
+  }
+
+
+
+  *{ box-sizing: border-box; }
+  html,body{ height:100%; }
+  body{
+    margin:0;
+    font-family: Inter, system-ui, "Segoe UI", Roboto, "Helvetica Neue", Arial;
+    background: var(--page-bg);
+    color: var(--text-color);
+    -webkit-font-smoothing:antialiased;
+    min-height:100vh;
+    padding:22px;
+    letter-spacing:0.2px;
+    transition: background .25s ease, color .18s ease, font-size .18s ease;
+    font-size: var(--font-s);
+  }
+
+  header{ display:flex; gap:12px; align-items:center; justify-content:space-between; margin-bottom:20px; }
+  .brand{ display:flex; gap:12px; align-items:center; }
+  .logo-wrap{ width:56px; height:56px; border-radius:12px; overflow:hidden; display:flex; align-items:center; justify-content:center; background:linear-gradient(135deg, rgba(255,255,255,0.02), rgba(0,0,0,0.12)); box-shadow: 0 8px 36px rgba(0,0,0,0.6); border:1px solid rgba(255,255,255,0.03); }
+  .logo-img{ width:100%; height:100%; object-fit:cover; display:block; image-rendering: auto; }
+  .logo-fallback{ width:100%; height:100%; display:flex; align-items:center; justify-content:center; font-weight:800; color:var(--title-color); font-size:20px; }
+
+  h1{ font-size:var(--title-size); margin:0; color:var(--title-color); line-height:1; }
+  .sub{ color:var(--muted); font-size:13px; }
+
+  .controls{ display:flex; gap:10px; align-items:center; }
+  .btn{ background:transparent; border:1px solid rgba(255,255,255,0.06); padding:8px 12px; border-radius:10px; color:var(--accent-start); cursor:pointer; font-weight:600; font-size:13px; box-shadow:0 6px 18px rgba(0,0,0,0.18); transition:all .12s ease; backdrop-filter: blur(4px); }
+  .btn.primary{ background:linear-gradient(90deg,var(--accent-start) 0%, var(--accent-end) 100%); color:#012216; border:none; box-shadow:0 10px 36px rgba(36,255,180,0.06); }
+  .btn:hover{ transform: translateY(-3px); }
+
+  .layout{ display:grid; grid-template-columns: 1fr 380px; gap:18px; align-items:start; }
+
+  .panel{ background: linear-gradient(180deg, rgba(255,255,255,0.02), rgba(255,255,255,0.01)); border-radius:var(--radius); padding:14px; box-shadow: 0 12px 40px rgba(0,0,0,0.55); border:1px solid rgba(255,255,255,0.02); backdrop-filter: blur(6px); }
+  .panel-sm{ padding:12px; border-radius:12px; background: linear-gradient(180deg, rgba(255,255,255,0.02), rgba(0,0,0,0.18)); }
+
+  .add-row{ display:flex; gap:8px; margin-bottom:12px; align-items:center; flex-wrap:wrap; }
+  .input, select, textarea { background: rgba(0,0,0,0.35); border:1px solid rgba(255,255,255,0.03); padding:10px; border-radius:10px; color:inherit; font-size:13px; }
+  .input.small{ width:160px; }
+  .input[type="date"]{ cursor:pointer; }
+
+  .task-row{
+    display:grid;
+    grid-template-columns: 1fr 120px 110px 110px 100px 80px;
+    gap:10px; padding:12px; border-radius:12px; align-items:start;
+    background: linear-gradient(90deg, rgba(255,255,255,0.012), rgba(255,255,255,0.00));
+    margin-bottom:10px; transition:all .18s ease; border:1px solid rgba(255,255,255,0.02);
+  }
+  .task-row:hover{ transform:translateY(-6px); box-shadow: 0 18px 60px rgba(0,0,0,0.6); }
+  .title{ font-weight:700; font-size:14px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .desc {
+    color:var(--muted);
+    margin-top:6px;
+    font-size:13px;
+    line-height:1.4;
+    max-height: 4.5em;      /* ~3 linhas */
+    height: 4.5em;
+    overflow-y: auto;       /* scroll interno se maior */
+    word-break: break-word;
+    white-space: pre-wrap;
+    padding-right:6px;
+  }
+.task-status {
+  cursor: pointer;
+  padding: 6px 10px;
+  border-radius: 10px;
+  font-size: 12px;
+  font-weight: 700;
+  text-align: center;
+  user-select: none;
+  transition: all .2s ease;
+}
+
+.status-NI {
+  background: rgba(255,107,107,0.15);
+  color: #ff6b6b;
+}
+
+.status-EM {
+  background: rgba(255,209,102,0.18);
+  color: #ffb300;
+}
+
+.status-CO {
+  background: rgba(98,209,150,0.22);
+  color: #2f9e4b;
+}
+
+.task-status:hover {
+  transform: scale(1.05);
+}
+
+
+
+/* === Gradiente por status (sem quebrar layout) === */
+.task-row.NI {
+  background: linear-gradient(90deg, rgba(255,107,107,0.18), rgba(255,107,107,0.04));
+}
+
+.task-row.EM {
+  background: linear-gradient(90deg, rgba(255,209,102,0.20), rgba(255,209,102,0.04));
+}
+
+.task-row.CO {
+  background: linear-gradient(90deg, rgba(98,209,150,0.22), rgba(98,209,150,0.05));
+}
+
+.task-row.overdue {
+  background: linear-gradient(90deg, rgba(255,95,109,0.30), rgba(255,95,109,0.06));
+}
+
+/* === Gradiente por status === */
+.task-row.NI {
+  background: linear-gradient(90deg, rgba(255,107,107,0.18), rgba(255,107,107,0.04));
+}
+
+.task-row.EM {
+  background: linear-gradient(90deg, rgba(255,209,102,0.20), rgba(255,209,102,0.04));
+}
+
+.task-row.CO {
+  background: linear-gradient(90deg, rgba(98,209,150,0.22), rgba(98,209,150,0.05));
+}
+
+.task-row.overdue {
+  background: linear-gradient(90deg, rgba(255,95,109,0.30), rgba(255,95,109,0.06));
+}
+
+
+
+  .meta{ font-size:13px; color:var(--muted); text-align:left; }
+
+  .pill{ display:inline-block; padding:6px 10px; border-radius:999px; font-weight:700; font-size:12px; text-align:center; cursor:pointer; user-select:none; border:1px solid rgba(255,255,255,0.03); transition:transform .14s ease; }
+  .pill:active{ transform:scale(.98); }
+
+  .action-row{ display:flex; gap:6px; justify-content:flex-end; }
+  .action-icon{ background:transparent; border:1px solid rgba(255,255,255,0.03); padding:6px; border-radius:8px; cursor:pointer; }
+  .action-icon:hover{ transform:translateY(-3px); }
+
+  .chart{ width:100%; height:160px; display:block; background:linear-gradient(180deg, rgba(255,255,255,0.02), rgba(255,255,255,0.01)); border-radius:8px; padding:8px; }
+
+  .small-title{ font-size:13px; color:var(--muted); margin-bottom:8px; }
+
+  .settings-list{ display:flex; flex-direction:column; gap:8px; margin-top:10px; }
+  .chip{ padding:8px 10px; border-radius:8px; background:rgba(255,255,255,0.02); border:1px solid rgba(255,255,255,0.02); }
+
+  footer{ margin-top:18px; color:var(--muted); font-size:13px; text-align:center; }
+
+  .drawer{ position:fixed; inset:0; background: linear-gradient(180deg, rgba(0,0,0,0.55), rgba(0,0,0,0.8)); display:none; z-index:9999; align-items:center; justify-content:center; padding:24px; }
+  .drawer.show{ display:flex; }
+  .drawer-card{ width:min(980px,96%); max-height:92%; overflow:auto; border-radius:14px; background: linear-gradient(180deg, rgba(20,30,28,0.98), rgba(2,6,6,0.96)); border:1px solid rgba(255,255,255,0.04); padding:18px; box-shadow:0 30px 120px rgba(0,0,0,0.9); }
+
+  label{ font-size:13px; color:var(--muted); display:block; margin-bottom:6px; }
+
+  input[type="file"]{ color: #fff; }
+
+  /* LIMITES E FORÇAS PARA NÃO EMPURRAR LAYOUT */
+  textarea#tDesc, textarea.add-desc, .desc {
+    height: 4.5em !important;
+    max-height: 4.5em !important;
+    min-height: 4.5em !important;
+    overflow-y: auto !important;
+    resize: none !important;
+    display: block;
+    flex: 0 0 auto !important;
+    box-sizing: border-box !important;
+    width: 100%;
+  }
+
+  /* Modal de edição (estilizado como config) */
+  .edit-modal {
+    position: fixed;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    background: linear-gradient(180deg, rgba(20,30,28,0.98), rgba(2,6,6,0.96));
+    padding: 20px;
+    border-radius: 18px;
+    width: 92%;
+    max-width: 480px;
+    box-shadow: 0 30px 120px rgba(0,0,0,0.9);
+    color: #fff;
+    z-index: 100000;
+    display: none;
+    animation: fadeIn .18s ease-out;
+  }
+  .edit-modal h2 { margin:0 0 8px 0; font-size:18px; color:var(--title-color); text-align:center; }
+  .edit-modal label { margin-top:8px; font-size:13px; color:var(--muted); }
+  .edit-modal input, .edit-modal textarea, .edit-modal select {
+    width:100%; padding:10px; border-radius:10px; border:none; background:rgba(255,255,255,0.06); color:#fff; margin-top:6px; box-sizing:border-box;
+  }
+  .edit-modal textarea { height:4.5em; max-height:5em; overflow-y:auto; resize:none; }
+  .edit-modal .buttons { display:flex; gap:8px; margin-top:12px; }
+  .edit-modal .buttons button { flex:1; padding:10px; border-radius:10px; border:none; cursor:pointer; font-weight:700; background:linear-gradient(90deg,var(--accent-start),var(--accent-end)); color:#012216; }
+
+  @keyframes fadeIn { from{opacity:0; transform:translate(-50%,-45%)} to{opacity:1; transform:translate(-50%,-50%)} }
+
+  @media(max-width:980px){
+    .layout{ grid-template-columns:1fr; }
+    .task-row{ grid-template-columns: 1fr 120px 120px; display:grid; grid-auto-rows:auto; }
+    .controls{ flex-wrap:wrap; }
+  }
+/* ===== AJUSTE GLOBAL DE TEXTO ===== */
+*{
+  box-sizing: border-box;
+  word-wrap: break-word;
+  overflow-wrap: break-word;
+}
+
+body{
+  max-width: 100vw;
+  overflow-x: hidden;
+}
+/* ===== CELULAR ===== */
+@media (max-width: 768px){
+  h1{ font-size: 1.3rem; }
+  h2{ font-size: 1.1rem; }
+
+  .container{
+    padding: 12px;
+  }
+
+  table{
+    display: block;
+    width: 100%;
+    overflow-x: auto;
+  }
+
+  button,
+  input,
+  select{
+    width: 100%;
+  }
+}
+
+/* ===== TABLET ===== */
+@media (min-width: 769px) and (max-width: 1024px){
+  h1{ font-size: 1.6rem; }
+}
+/* ===== DESKTOP ===== */
+@media (min-width: 1025px){
+  .container{
+    max-width: 1200px;
+    margin: auto;
+  }
+}
+
+/* garante separação entre conteúdo e ações */
+.task-row{
+  align-items: flex-start;
+}
+
+/* bloco de ações sempre isolado */
+.action-row{
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+/* textos nunca invadem o bloco de ações */
+.task-row > div:not(.action-row){
+  min-width: 0;
+}
+
+/* MOBILE: empilha tudo */
+@media (max-width: 768px){
+  .task-row{
+    grid-template-columns: 1fr;
+    row-gap: 10px;
+  }
+
+  .action-row{
+    justify-content: flex-start;
+  }
+}
+
+/* ===== TASK ROW OCUPAR ATÉ O DASH ===== */
+.task-row{
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 12px;
+  align-items: flex-start;
+}
+
+/* conteúdo da tarefa (descrição + datas) */
+.task-content{
+  width: 100%;
+  min-width: 0;
+}
+
+/* descrição pode crescer e quebrar linha */
+.desc{
+  word-break: break-word;
+  overflow-wrap: anywhere;
+}
+
+/* botões não empurram o layout */
+.action-row{
+  display: flex;
+  gap: 6px;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+/* MOBILE */
+@media (max-width: 768px){
+  .task-row{
+    grid-template-columns: 1fr;
+  }
+}
+
+
+#pieChart{
+  width: 100%;
+  height: 260px;
+}
+
+.task-row.overdue {
+  border: 1px solid #ff5f6d;
+  box-shadow: 0 0 0 1px rgba(255,95,109,.45);
+}
+
+/* Tema padrão (escuro) */
+:root {
+  --bg-main: #042017;
+  --bg-card: #063426;
+  --text-main: #fff;
+  --color-primary: #42b983;
+  --color-overdue: #e74c3c;
+  --color-complete: #2ecc71;
+}
+
+/* Tema claro */
+body.light-theme {
+  --bg-main: #f5f5f5;
+  --bg-card: #ffffff;
+  --text-main: #222;
+  --color-primary: #42b983;
+  --color-overdue: #e74c3c;
+  --color-complete: #2ecc71;
+}
+
+/* Aplicando as variáveis nos elementos */
+body {
+  background-color: var(--bg-main);
+  color: var(--text-main);
+  transition: all 0.3s;
+}
+
+.card {
+  background-color: var(--bg-card);
+  border-radius: 10px;
+  padding: 15px;
+  margin-bottom: 10px;
+  transition: all 0.3s;
+}
+
+/* === Texto do status sempre visível === */
+.task-row .status {
+  font-weight: 700;
+  font-size: 12px;
+  text-transform: uppercase;
+  padding: 4px 10px;
+  border-radius: 999px;
+  text-align: center;
+  white-space: nowrap;
+}
+
+/* Cores por status */
+.task-row.NI .status {
+  color: #ff6b6b;
+  background: rgba(255,107,107,0.15);
+}
+
+.task-row.EM .status {
+  color: #ffb300;
+  background: rgba(255,209,102,0.18);
+}
+
+.task-row.CO .status {
+  color: #2f9e4b;
+  background: rgba(98,209,150,0.20);
+}
+
+.task-row.overdue .status {
+  color: #ff3b3f;
+  background: rgba(255,95,109,0.22);
+}
+
+/* === Ícone da tarefa === */
+.task-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.task-icon {
+  width: 22px;
+  height: 22px;
+  border-radius: 6px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 13px;
+  font-weight: 700;
+  background: rgba(255,255,255,0.08);
+}
+
+/* Ícone por status */
+.task-row.NI .task-icon {
+  color: #ff6b6b;
+  background: rgba(255,107,107,0.18);
+}
+
+.task-row.EM .task-icon {
+  color: #ffb300;
+  background: rgba(255,209,102,0.22);
+}
+
+.task-row.CO .task-icon {
+  color: #2f9e4b;
+  background: rgba(98,209,150,0.25);
+}
+
+.task-row.overdue .task-icon {
+  color: #ff3b3f;
+  background: rgba(255,95,109,0.28);
+}
+
+/* === Badge de status da tarefa (topo) === */
+.status-badge{
+  padding: 4px 10px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: .3px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+/* Cores usando seus status */
+.status-NI{
+  background: rgba(255,107,107,0.15);
+  color: #ff6b6b;
+  border: 1px solid rgba(255,107,107,0.35);
+}
+
+.status-EM{
+  background: rgba(255,209,102,0.18);
+  color: #ffb300;
+  border: 1px solid rgba(255,209,102,0.35);
+}
+
+.status-CO{
+  background: rgba(98,209,150,0.18);
+  color: #2f9e4b;
+  border: 1px solid rgba(98,209,150,0.35);
+}
+
+.action-row{
+  display:flex;
+  flex-direction:column;
+  align-items:center;
+  gap:8px;
+}
+
+/* status */
+.task-status{
+  font-size:12px;
+  font-weight:700;
+  padding:6px 12px;
+  border-radius:999px;
+  cursor:pointer;
+  user-select:none;
+  border:1px solid transparent;
+}
+
+/* cores por status */
+.status-NI{
+  background:rgba(255,107,107,0.18);
+  color:#ff9b9b;
+  border-color:rgba(255,107,107,0.35);
+}
+
+.status-EM{
+  background:rgba(255,209,102,0.18);
+  color:#ffd166;
+  border-color:rgba(255,209,102,0.35);
+}
+
+.status-CO{
+  background:rgba(98,209,150,0.22);
+  color:#62d196;
+  border-color:rgba(98,209,150,0.40);
+}
+
+/* ícones continuam lado a lado */
+.action-icons{
+  display:flex;
+  gap:6px;
+}
+
+
+
+/* AÇÃO + STATUS (não quebra layout) */
+.action-row{
+  display:flex;
+  flex-direction:column;
+  align-items:center;
+  gap:6px;
+}
+
+.action-icons{
+  display:flex;
+  gap:6px;
+}
+.action-row{
+  display:flex;
+  gap:6px;
+}
+
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Planejador Lucs — Bruna</title>
+
+  <style>
+    :root{
+      --bg-a: #042017;
+      --bg-b: #063426;
+      --bg-c: #0b2f22;
+      --card: rgba(18,25,28,0.8);
+    }
+
+    /* Aqui você adiciona o estilo do preview do logo */
+    #previewLogo {
+      width: 200px; /* ou ajuste para o tamanho desejado */
+      height: 200px;
+      background-size: contain;  /* mantém proporção */
+      background-position: center;
+      background-repeat: no-repeat;
+      image-rendering: auto;     /* suaviza a imagem */
+    }
+
+    /* outros estilos já existentes */
+  #previewLogo {
+  width: 300px;  /* aumenta o tamanho */
+  height: 300px;
+  background-size: contain;
+  background-position: center;
+  background-repeat: no-repeat;
+  image-rendering: auto;
+}
+
+
+</style>
+</head>
+<body>
+<header>
+  <div class="brand">
+    <div class="logo-wrap" id="logoWrap" title="Logo">
+      <div class="logo-fallback" id="logoFallback">PL</div>
+    </div>
+    <div>
+      <h1 id="mainTitle">Planejador Lucs</h1>
+      <div class="sub" id="mainSub">Bruna · painel rápido • salvamento local</div>
+    </div>
+  </div>
+
+  <div class="controls">
+    <button class="btn" id="btnExport">Exportar CSV</button>
+    <!-- Backup / Import (existem para evitar erro JS) -->
+    <button class="btn" id="btnBackup" style="display:none">Backup</button>
+    <button class="btn" id="btnImport" style="display:none">Import</button>
+    <button class="btn" id="btnClear">Limpar Tudo</button>
+    <button class="btn" id="btnOpenSettings">⚙️ Configurações</button>
+    <button class="btn primary" id="btnNew">➕ Nova tarefa</button>
+    <button class="btn" onclick="exportExcel()">Exportar XLS</button>
+    
+
+
+  </div>
+</header>
+
+<main class="layout">
+  <section class="panel" id="leftPanel">
+    <div style="display:flex;gap:12px;align-items:center;justify-content:space-between;flex-wrap:wrap">
+      <div style="display:flex;gap:8px;align-items:center">
+        <select id="filterStatus" class="input small" onchange="render()">
+          <option value="">Status (Todos)</option>
+          <option value="NI">Não iniciado</option>
+          <option value="EM">Em andamento</option>
+          <option value="CO">Concluído</option>
+        </select>
+
+        <select id="filterResp" class="input small" onchange="render()">
+          <option value="">Responsáveis (Todos)</option>
+        </select>
+      </div>
+
+      <input id="search" class="input" placeholder="Buscar tarefa, descrição ou responsável..." oninput="render()" style="width:50%">
+    </div>
+
+    <div class="add-row" style="margin-top:12px">
+      <input id="tTitulo" class="input" placeholder="Título (ex: Reunir comprovantes)" />
+      <!-- descrição como textarea (controlada para não empurrar layout) -->
+      <textarea id="tDesc" class="input add-desc" placeholder="Descrição (opcional)"></textarea>
+      <input id="tStart" class="input small" type="date" title="Data de início" />
+      <input id="tPrazo" class="input small" type="date" title="Previsão / Prazo" />
+      <select id="tResp" class="input small"></select>
+      <select id="tStatus" class="input small">
+        <option value="NI">Não iniciado</option>
+        <option value="EM">Em andamento</option>
+        <option value="CO">Concluído</option>
+      </select>
+      <button class="btn primary" id="btnSaveInline">Salvar</button>
+    </div>
+
+    <div id="tasksContainer" style="margin-top:14px"></div>
+
+    <div style="margin-top:10px;color:var(--muted);font-size:13px">
+      Dica: clique no status para alternar rápido. Use o menu de ações para marcar cobrança.
+    </div>
+  </section>
+
+  <aside style="display:flex;flex-direction:column;gap:12px">
+    <div class="panel-sm panel">
+      <div class="small-title">Dashboard</div>
+      <canvas id="pieChart" class="chart"></canvas>
+      <div style="height:10px"></div>
+      <canvas id="barChart" class="chart"></canvas>
+      <div style="height:10px"></div>
+      <canvas id="lineChart" class="chart"></canvas>
+    </div>
+
+    <div class="panel-sm panel">
+      <div class="small-title">Ações rápidas</div>
+      <div style="display:flex;gap:8px">
+        <button class="btn" onclick="bulkAssignPrompt()">Atribuir múltiplos</button>
+        <button class="btn" onclick="notifyOverdue()">Notificar vencidos</button>
+      </div>
+    </div>
+  </aside>
+</main>
+
+<footer id="footerText">Planejador Lucs — painel rápido • salvo no navegador</footer>
+
+<!-- Drawer (Configurações) -->
+<div id="drawer" class="drawer" aria-hidden="true">
+  <div class="drawer-card" role="dialog" aria-modal="true" aria-labelledby="drawerTitle">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+      <div>
+        <h2 id="drawerTitle" style="margin:0 0 6px 0">Configurações</h2>
+        <div style="color:var(--muted)">Altere aqui fonte, tamanhos, cores, logo, título e responsáveis.</div>
+      </div>
+      <div style="display:flex;gap:8px">
+        <button class="btn" id="btnCloseDrawer">Fechar</button>
+        <button class="btn primary" id="btnSaveDrawer">Salvar e Aplicar</button>
+      </div>
+    </div>
+
+    <div style="display:flex;gap:18px;flex-wrap:wrap">
+      <div style="flex:1;min-width:300px">
+        <div class="chip">
+          <label>Logo (upload PNG/JPG) — irá preencher o quadrado do logo:</label><br>
+          <input type="file" id="logoFile" accept="image/*" />
+          <div style="height:8px"></div>
+
+          <label>Texto do título:</label><br>
+          <input id="cfgTitle" class="input" placeholder="Planejador Lucs" />
+
+          <div style="height:8px"></div>
+          <label>Subtítulo / dono (ex: Bruna):</label><br>
+          <input id="cfgSub" class="input" placeholder="Bruna · painel rápido" />
+        </div>
+
+        <div class="chip" style="margin-top:10px">
+          <label>Tipografia & Tamanho (aplica ao painel):</label><br>
+          <select id="fontSelectDrawer" class="input">
+            <option value="Inter, system-ui, Arial">Inter (padrão)</option>
+            <option value="Roboto, sans-serif">Roboto</option>
+            <option value="Segoe UI, system-ui">Segoe UI</option>
+            <option value="Georgia, serif">Serif</option>
+            <option value="Courier New, monospace">Monospace</option>
+          </select>
+          <div style="height:8px"></div>
+          <label>Tamanho base do texto (px):</label><br>
+          <input type="number" id="fontSizeDrawer" class="input small" min="12" max="20" />
+        </div>
+
+        <div class="chip" style="margin-top:10px">
+          <label>Degradê do fundo (escolha três cores):</label><br>
+          <input type="color" id="bg1" value="#042017" /> <input type="color" id="bg2" value="#063426" /> <input type="color" id="bg3" value="#0b2f22" />
+          <div style="height:8px"></div>
+
+          <label>Cores dos status:</label><br>
+          <input type="color" id="colorNI" value="#ff5f6d" title="Não iniciado" /> Não iniciado &nbsp;
+          <input type="color" id="colorEM" value="#ffd166" title="Em andamento" /> Em andamento &nbsp;
+          <input type="color" id="colorCO" value="#62d196" title="Concluído" />
+          <div style="height:8px"></div>
+
+          <label>Cor do texto geral:</label><br>
+          <input type="color" id="textColor" value="#e8f7f1" /> Cor do texto &nbsp;
+          <label style="margin-left:12px">Cor do título:</label><br>
+          <input type="color" id="titleColor" value="#29ff9a" />
+        </div>
+      </div>
+
+      <div style="flex:1;min-width:280px">
+        <div class="chip">
+          <label>Preview do tema:</label>
+          <div id="preview" style="height:120px;border-radius:8px;margin-top:8px;padding:10px;background:var(--glass);color:var(--muted);display:flex;align-items:center;gap:8px">
+            <div id="previewLogo" style="width:48px;height:48px;border-radius:8px;background:rgba(0,0,0,0.25);display:flex;align-items:center;justify-content:center;overflow:hidden;font-weight:800;color:var(--title-color);">
+            </div>
+            <div>
+              <div id="previewTitle" style="font-weight:800">Planejador Lucs</div>
+              <div id="previewSub" style="color:var(--muted);font-size:12px">Bruna · painel rápido</div>
+            </div>
+          </div>
+        </div>
+
+        <div class="chip" style="margin-top:12px">
+          <label>Responsáveis (separados por vírgula):</label>
+          <textarea id="respListDrawer" rows="3" style="width:100%;background:transparent;border:none;color:inherit"></textarea>
+          <div style="height:8px"></div>
+          <label><input type="checkbox" id="compactCards" /> Cartões compactos</label><br>
+          <label><input type="checkbox" id="showShadows" checked /> Mostrar sombra nos cartões</label>
+        </div>
+      </div>
+    </div>
+
+    <div style="margin-top:12px;display:flex;gap:8px;justify-content:flex-end">
+      <button class="btn" id="btnRestore">Recarregar (localStorage)</button>
+      <button class="btn" id="btnResetDefaults">Restaurar padrões</button>
+    </div>
+  </div>
+</div>
+
+<!-- Edit modal -->
+<div id="editModal" class="edit-modal" role="dialog" aria-modal="true" aria-labelledby="editTitle">
+  <h2 id="editTitle">Editar tarefa</h2>
+  <input type="hidden" id="editId" />
+  <label>Título</label>
+  <input id="editTitulo" />
+  <label>Descrição</label>
+  <textarea id="editDesc"></textarea>
+  <label>Data início</label>
+  <input id="editStart" type="date" />
+  <label>Previsão / Prazo</label>
+  <input id="editPrazo" type="date" />
+  <label>Responsáveis</label>
+  <select id="editResp"></select>
+  <label>Status</label>
+  <select id="editStatus">
+    <option value="NI">Não iniciado</option>
+    <option value="EM">Em andamento</option>
+    <option value="CO">Concluído</option>
+  </select>
+
+  <div class="buttons">
+    <button id="btnSaveEdit">Salvar</button>
+    <button id="btnCancelEdit" style="background:rgba(255,255,255,0.08); color:var(--text-color);">Cancelar</button>
+  </div>
+</div>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/xlsx/dist/xlsx.full.min.js"></script>
+
+
+<script>
+/* Keys */
+const STORAGE_KEY = 'gt_tasks_v3';
+const CONF_KEY = 'gt_conf_v3';
+
+let tasks = [];
+let conf = {
+  colors: { NI: '#ff5f6d', EM: '#ffd166', CO: '#62d196' },
+  font: 'Inter, system-ui, Arial',
+  fontSize: 14,
+  Responsáveis: ['Lucas','João','Maria'],
+  bg: { a: '#042017', b: '#063426', c: '#0b2f22' },
+  compactCards: false,
+  showShadows: true,
+  logoDataUrl: '',
+  titleText: 'Planejador Lucs',
+  subText: 'Bruna · painel rápido'
+};
+
+function escapeHtml(s){ return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
+function nl2br(s){ return (escapeHtml(s||'')).replace(/\n/g,'<br>'); }
+function formatDate(d){ if(!d) return '-'; try{ const parts = d.split('-');if(parts.length===3) return `${parts[2]}/${parts[1]}/${parts[0]}`;
+ ; return new Date(d).toLocaleDateString(); }catch(e){ return d; } }
+function todayISO(){ return new Date().toISOString().slice(0,10); }
+function contrastColor(hex){ if(!hex) return '#000'; const c = hex.replace('#',''); const r = parseInt(c.substr(0,2),16), g = parseInt(c.substr(2,2),16), b = parseInt(c.substr(4,2),16); const yiq = ((r*299)+(g*587)+(b*114))/1000; return yiq >= 128 ? '#02120a' : '#fff'; }
+function uuidFallback(){ return 'id-'+Date.now()+'-'+Math.floor(Math.random()*10000); }
+
+/* Storage */
+function load(){
+  try{
+    const raw = localStorage.getItem(STORAGE_KEY);
+    tasks = raw ? JSON.parse(raw) : [];
+    tasks = Array.isArray(tasks) ? sanitizeTasks(tasks) : [];
+  }catch(e){ 
+    tasks = []; 
+    console.warn(e); 
+  }
+
+  try{
+    const rawC = localStorage.getItem(CONF_KEY);
+    if(rawC){
+      const parsed = JSON.parse(rawC);
+      conf = Object.assign({}, conf, parsed);
+      if(parsed.colors) conf.colors = Object.assign({}, conf.colors, parsed.colors);
+      if(parsed.bg) conf.bg = Object.assign({}, conf.bg, parsed.bg);
+      if(parsed.Responsáveis) conf.Responsáveis = parsed.Responsáveis;
+    }
+  }catch(e){ 
+    console.warn(e); 
+  }
+
+  applyConfToUi();
+  populateResponsáveis();
+  render();
+  drawCharts();
+
+}
+
+function sanitizeTasks(list){
+  return list.filter(t =>
+    t &&
+    typeof t === 'object' &&
+    typeof t.id === 'string' &&
+    typeof t.titulo === 'string' &&
+    typeof t.status === 'string'
+  );
+}
+
+function isOverdue(t){
+  if(!t.prazo) return false;
+  if(t.status === 'CO') return false;
+  return t.prazo < todayISO();
+}
+
+function save(){
+  try{
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(tasks));
+    localStorage.setItem(CONF_KEY, JSON.stringify(conf));
+  }catch(e){
+    console.error('Erro salvar', e);
+    alert('Erro ao salvar no navegador.');
+  }
+}
+function applySettingsToConf() {
+  try {
+    // textos
+    conf.titleText = document.getElementById('cfgTitle').value || conf.titleText;
+    conf.subText = document.getElementById('cfgSub').value || conf.subText;
+
+    // fonte
+    conf.font = document.getElementById('fontSelectDrawer').value || conf.font;
+    const fs = parseInt(document.getElementById('fontSizeDrawer').value, 10);
+    if (!isNaN(fs)) conf.fontSize = fs;
+
+    // fundo
+    conf.bg = {
+      a: document.getElementById('bg1').value,
+      b: document.getElementById('bg2').value,
+      c: document.getElementById('bg3').value
+    };
+
+    // cores
+    conf.colors = {
+      NI: document.getElementById('colorNI').value,
+      EM: document.getElementById('colorEM').value,
+      CO: document.getElementById('colorCO').value
+    };
+
+    conf.textColor = document.getElementById('textColor').value;
+    conf.titleColor = document.getElementById('titleColor').value;
+
+    // responsáveis
+    const rawResp = document.getElementById('respListDrawer').value || '';
+    conf.Responsáveis = rawResp
+      .split(',')
+      .map(r => r.trim())
+      .filter(Boolean);
+
+    // Atualiza o campo 'resp' de todas as tarefas existentes
+    tasks.forEach(t => {
+      t.resp = conf.Responsáveis.join(', ');
+    });
+
+    // switches
+    conf.compactCards = document.getElementById('compactCards').checked;
+    conf.showShadows = document.getElementById('showShadows').checked;
+
+    // salva + aplica
+    save();
+    applyConfToUi();
+    populateResponsáveis();
+    render();
+    drawCharts();
+
+    closeDrawer();
+  } catch (e) {
+    console.error('Erro ao aplicar configurações:', e);
+    alert('Erro ao aplicar configurações.');
+  }
+}
+
+
+/* UI helpers */
+function populateResponsáveis() {
+  const selAdd = document.getElementById('tResp');
+  const selFilter = document.getElementById('filterResp');
+  const selEdit = document.getElementById('editResp');
+  if(!selAdd || !selFilter || !selEdit) return;
+
+  selAdd.innerHTML = '';
+  selFilter.innerHTML = '<option value="">Responsáveis (Todos)</option>';
+  selEdit.innerHTML = '';
+
+  // aqui pega todos os responsáveis das tarefas salvas
+  const todosResp = Array.from(new Set(tasks.flatMap(t => t.resp.split(',').map(r=>r.trim()).filter(Boolean))));
+
+  todosResp.forEach(r=>{
+    const o1 = document.createElement('option'); o1.value=r; o1.textContent=r; selAdd.appendChild(o1);
+    const o2 = document.createElement('option'); o2.value=r; o2.textContent=r; selFilter.appendChild(o2);
+    const o3 = document.createElement('option'); o3.value=r; o3.textContent=r; selEdit.appendChild(o3);
+  });
+
+  // preenche drawer sem sobrescrever nada
+  const rdDrawer = document.getElementById('respListDrawer'); 
+  if(rdDrawer) rdDrawer.value = todosResp.join(', ');
+}
+
+
+
+function applyConfToUi(){
+  const mainTitle = document.getElementById('mainTitle');
+  const mainSub = document.getElementById('mainSub');
+  mainTitle.textContent = conf.titleText || 'Planejador Lucs';
+  mainSub.textContent = conf.subText || '';
+
+document.getElementById('cfgTitle').value = conf.titleText || '';
+document.getElementById('cfgSub').value = conf.subText || '';
+document.getElementById('fontSelectDrawer').value = conf.font;
+document.getElementById('fontSizeDrawer').value = conf.fontSize;
+
+document.getElementById('bg1').value = conf.bg.a;
+document.getElementById('bg2').value = conf.bg.b;
+document.getElementById('bg3').value = conf.bg.c;
+
+document.getElementById('colorNI').value = conf.colors.NI;
+document.getElementById('colorEM').value = conf.colors.EM;
+document.getElementById('colorCO').value = conf.colors.CO;
+
+document.getElementById('textColor').value  = conf.textColor || '#e8f7f1';
+document.getElementById('titleColor').value = conf.titleColor || '#29ff9a';
+
+document.getElementById('compactCards').checked = !!conf.compactCards;
+document.getElementById('showShadows').checked  = !!conf.showShadows;
+
+
+  const existingImg = document.getElementById('logoImgInjected');
+  if(existingImg) existingImg.remove();
+  const logoWrap = document.getElementById('logoWrap');
+  const fallback = document.getElementById('logoFallback');
+  if(conf.logoDataUrl){
+    const img = document.createElement('img');
+    img.id = 'logoImgInjected'; img.className='logo-img'; img.src = conf.logoDataUrl; img.alt='Logo'; img.decoding='async';
+    logoWrap.appendChild(img);
+    if(fallback) fallback.style.display='none';
+  } else {
+    if(fallback){ fallback.style.display='flex'; fallback.textContent = (conf.titleText || 'PL').split(' ').map(s=>s[0]||'').slice(0,2).join('').toUpperCase() || 'PL'; }
+  }
+
+  document.body.style.fontFamily = conf.font || 'Inter, system-ui, Arial';
+  document.documentElement.style.setProperty('--font-s', (conf.fontSize || 14) + 'px');
+  document.documentElement.style.setProperty('--title-size', Math.max(14, (conf.fontSize || 14) + 4) + 'px');
+
+  const a = (conf.bg && conf.bg.a) ? conf.bg.a : '#042017';
+  const b = (conf.bg && conf.bg.b) ? conf.bg.b : '#063426';
+  const c = (conf.bg && conf.bg.c) ? conf.bg.c : '#0b2f22';
+  document.documentElement.style.setProperty('--bg-a', a);
+  document.documentElement.style.setProperty('--bg-b', b);
+  document.documentElement.style.setProperty('--bg-c', c);
+  document.documentElement.style.setProperty('--page-bg', `linear-gradient(135deg, ${a} 0%, ${b} 45%, ${c} 100%)`);
+
+  document.documentElement.style.setProperty('--text-color', conf.textColor || '#e8f7f1');
+  document.documentElement.style.setProperty('--title-color', conf.titleColor || (conf.colors && conf.colors.EM) || 'var(--accent-start)');
+
+  if(conf.compactCards) document.documentElement.style.setProperty('--radius','8px'); else document.documentElement.style.setProperty('--radius','12px');
+}
+
+/* CRUD */
+function addTaskFromForm(){
+  const titulo = (document.getElementById('tTitulo').value || '').trim();
+  const desc = (document.getElementById('tDesc').value || '').trim();
+  const start = document.getElementById('tStart').value || '';
+  const prazo = document.getElementById('tPrazo').value || '';
+  let resp = document.getElementById('tResp').value || (conf.Responsáveis[0]||'Sem responsável');
+  const status = document.getElementById('tStatus').value || 'NI';
+
+  if(resp && !conf.Responsáveis.includes(resp)){
+    const add = confirm(`Responsável "${resp}" não está na lista de responsáveis.\nDeseja adicioná-lo(a) às opções?`);
+    if(add){ conf.Responsáveis.push(resp); populateResponsáveis(); }
+    else resp = conf.Responsáveis[0] || 'Sem responsável';
+  }
+
+  if(!titulo){ alert('Preencha o título'); return; }
+
+  const id = (typeof crypto !== 'undefined' && crypto.randomUUID) ? crypto.randomUUID() : uuidFallback();
+  const task = { id, titulo, desc, resp, start, prazo, status, created: new Date().toISOString(), completedAt: status==='CO' ? todayISO() : '' };
+  tasks.unshift(task);
+
+  document.getElementById('tTitulo').value=''; document.getElementById('tDesc').value=''; document.getElementById('tStart').value=''; document.getElementById('tPrazo').value='';
+
+  save(); render(); drawCharts();
+}
+
+function deleteTask(id){
+  if(!confirm('Excluir tarefa?')) return;
+  tasks = tasks.filter(t=>t.id!==id);
+  save(); render(); drawCharts();
+}
+
+function toggleStatus(id){
+  const t = tasks.find(x=>x.id===id); if(!t) return;
+  t.status = t.status === 'NI' ? 'EM' : (t.status === 'EM' ? 'CO' : 'NI');
+  if(t.status === 'CO') t.completedAt = todayISO(); else t.completedAt='';
+  save(); render(); drawCharts();
+}
+
+function assign(id, resp){
+  const t = tasks.find(x=>x.id===id); if(!t) return;
+  t.resp = resp; if(!conf.Responsáveis.includes(resp)) conf.Responsáveis.push(resp);
+  save(); populateResponsáveis(); render(); drawCharts();
+}
+
+function cobrar(id){
+  const t = tasks.find(x=>x.id===id); if(!t) return;
+  if(!t.titulo.startsWith('⚠️')) t.titulo = '⚠️ ' + t.titulo;
+  save(); render();
+}
+
+function bulkAssignPrompt(){
+  const name = prompt('Nome do responsável para atribuir a todas as tarefas filtradas:'); if(!name) return;
+  const fStatus = document.getElementById('filterStatus').value;
+  const fResp = document.getElementById('filterResp').value;
+  const search = (document.getElementById('search').value||'').toLowerCase();
+  tasks.forEach(t=>{
+    if(fStatus && t.status!==fStatus) return;
+    if(fResp && t.resp!==fResp) return;
+    if(search && !(t.titulo+t.resp+(t.desc||'')).toLowerCase().includes(search)) return;
+    t.resp = name;
+  });
+  if(!conf.Responsáveis.includes(name)) conf.Responsáveis.push(name);
+  save(); populateResponsáveis(); render(); drawCharts();
+}
+
+function notifyOverdue(){
+  const today = todayISO();
+  const overdue = tasks.filter(t=>t.prazo && t.prazo < today && t.status !== 'CO');
+  if(overdue.length===0){ alert('Nenhuma tarefa vencida.'); return; }
+ const list = overdue.map(
+  t => `${t.titulo} — ${t.resp} — ${formatDate(t.prazo)}`
+).join('\n');
+
+  alert('Tarefas vencidas:\n\n' + list);
+}
+
+/* Render */
+function render(){
+  const cont = document.getElementById('tasksContainer'); if(!cont) return;
+  cont.innerHTML = '';
+  const fStatus = document.getElementById('filterStatus').value;
+  const fResp = document.getElementById('filterResp').value;
+  const q = (document.getElementById('search').value||'').toLowerCase();
+
+  const filtered = tasks.filter(t=>{
+    if(fStatus && t.status!==fStatus) return false;
+    if(fResp && t.resp!==fResp) return false;
+    if(q){
+
+      const s = (t.titulo + ' ' + (t.desc||'') + ' ' + (t.resp||'')).toLowerCase();
+      if(!s.includes(q)) return false;
+    }
+    return true;
+  });
+
+  if(filtered.length===0){
+    cont.innerHTML = `
+  <div style="padding:24px;color:var(--muted)">
+
+
+
+
+    Nenhuma tarefa — crie sua primeira tarefa 👇
+  </div>
+`;
+
+    return;
+  }
+
+  filtered.forEach(t=>{
+    const row = document.createElement('div'); row.className='task-row';
+    if(isOverdue(t)) row.classList.add('overdue');
+
+    if(conf.compactCards) row.style.padding='8px';
+    if(!conf.showShadows) row.style.boxShadow='none';
+
+    const statusColor = conf.colors[t.status] || '#888';
+    const statusTextColor = contrastColor(statusColor);
+
+    row.innerHTML = `
+      <div>
+        <div class="title">${escapeHtml(t.titulo)}</div>
+        <div class="desc" title="${escapeHtml(t.desc||'')}">${nl2br(t.desc||'')}</div>
+        <div style="margin-top:6px;font-size:12px;color:var(--muted)">
+          <span>Início: ${t.start ? formatDate(t.start) : '-'}</span>
+          &nbsp;•&nbsp;
+          <span>Prev: ${t.prazo ? formatDate(t.prazo) : '-'}</span>
+          &nbsp;•&nbsp;
+          <span>Concluído: ${t.completedAt ? formatDate(t.completedAt) : '-'}</span>
+        </div>
+      </div>     
+
+
+      <div class="action-row">
+
+
+  <!-- STATUS -->
+  <div 
+    class="task-status status-${t.status}" 
+    onclick="toggleStatus('${t.id}')"
+    title="Clique para mudar o status"
+  >
+    ${getStatusLabel(t.status)}
+  </div>
+
+  <!-- ÍCONES -->
+  <div class="action-icons">
+    <button class="action-icon" title="Atribuir" onclick="showAssignMenu(event, '${t.id}')">👤</button>
+    <button class="action-icon" title="Editar" onclick="openEdit('${t.id}')">✏️</button>
+    <button class="action-icon" title="Enviar email" onclick="sendTaskEmail('${t.id}')">📧</button>
+    <button class="action-icon" title="Gerar PDF" onclick="exportTaskPDF('${t.id}')">📄</button>
+    <button class="action-icon" title="Cobrança" onclick="cobrar('${t.id}')">💬</button>
+    <button class="action-icon" title="Excluir" onclick="deleteTask('${t.id}')">🗑️</button>
+  </div>
+
+</div>
+
+
+</div>
+
+    `;
+    cont.appendChild(row);
+  });
+}
+
+/* Assign menu */
+function showAssignMenu(e, id){
+  const old = document.getElementById('assignMenu'); if(old) old.remove();
+  const menu = document.createElement('div'); menu.id='assignMenu';
+  menu.style.position='fixed'; menu.style.zIndex=9999;
+  menu.style.left = (e.clientX+6)+'px'; menu.style.top = (e.clientY+6)+'px';
+  menu.style.background='rgba(2,8,8,0.98)'; menu.style.border='1px solid rgba(255,255,255,0.04)';
+  menu.style.padding='8px'; menu.style.borderRadius='8px'; menu.style.minWidth='140px';
+  conf.Responsáveis.forEach(r=>{
+    const btn = document.createElement('div'); btn.textContent=r; btn.style.padding='6px 8px'; btn.style.cursor='pointer';
+    btn.onclick = ()=>{ assign(id, r); menu.remove(); };
+    menu.appendChild(btn);
+  });
+  const cancel = document.createElement('div'); cancel.textContent='Cancelar'; cancel.style.marginTop='6px'; cancel.style.opacity=0.6; cancel.style.cursor='pointer';
+  cancel.onclick = ()=> menu.remove(); menu.appendChild(cancel);
+  document.body.appendChild(menu);
+}
+
+/* Edit modal handlers (replace prompt-based editing) */
+function openEdit(id){
+  const t = tasks.find(x=>x.id===id); if(!t) return;
+  document.getElementById('editId').value = t.id;
+  document.getElementById('editTitulo').value = t.titulo || '';
+  document.getElementById('editDesc').value = t.desc || '';
+  document.getElementById('editStart').value = t.start || '';
+  document.getElementById('editPrazo').value = t.prazo || '';
+  document.getElementById('editResp').value = t.resp || (conf.Responsáveis[0]||'');
+  document.getElementById('editStatus').value = t.status || 'NI';
+  document.getElementById('editModal').style.display = 'block';
+}
+
+document.getElementById('btnCancelEdit').addEventListener('click', ()=>{
+  document.getElementById('editModal').style.display = 'none';
+});
+
+document.getElementById('btnSaveEdit').addEventListener('click', ()=>{
+  const id = document.getElementById('editId').value;
+  const t = tasks.find(x=>x.id===id); if(!t) return;
+  const newTitle = document.getElementById('editTitulo').value.trim();
+  const newDesc = document.getElementById('editDesc').value;
+  const newStart = document.getElementById('editStart').value;
+  const newPrazo = document.getElementById('editPrazo').value;
+  const newResp = document.getElementById('editResp').value;
+  const newStatus = document.getElementById('editStatus').value;
+
+  if(newResp && !conf.Responsáveis.includes(newResp)){ if(confirm(`Responsável "${newResp}" não está na lista. Adicionar?`)) conf.Responsáveis.push(newResp); }
+  t.titulo = newTitle || t.titulo;
+  t.desc = newDesc;
+  t.start = newStart;
+  t.prazo = newPrazo;
+  t.resp = newResp || t.resp;
+  const prevStatus = t.status;
+  t.status = newStatus || t.status;
+  if(prevStatus !== 'CO' && t.status === 'CO') t.completedAt = todayISO();
+  if(t.status !== 'CO') t.completedAt = '';
+
+  save(); populateResponsáveis(); render(); drawCharts();
+  document.getElementById('editModal').style.display = 'none';
+});
+
+/* Charts */
+function drawCharts(){ drawPie(); drawBar(); drawLine(); }
+function getCounts(){ const counts = { NI:0, EM:0, CO:0 }; tasks.forEach(t=> counts[t.status] = (counts[t.status]||0)+1); return counts; }
+
+function drawPie(){
+  const c = document.getElementById('pieChart');
+  if(!c) return;
+
+  const ctx = c.getContext('2d');
+  const dpr = window.devicePixelRatio || 1;
+
+  const w = c.clientWidth;
+  const h = c.clientHeight;
+
+  c.width  = w * dpr;
+  c.height = h * dpr;
+  ctx.setTransform(dpr,0,0,dpr,0,0);
+
+  ctx.clearRect(0,0,w,h);
+
+  const legendSpace = 180;
+  const drawW = w - legendSpace;
+
+  const cx = drawW / 2;
+  const cy = h / 2;
+  const r  = Math.min(drawW, h) / 3;
+
+  const counts = getCounts();
+  const total = counts.NI + counts.EM + counts.CO || 1;
+
+  const arcs = [
+    {k:'NI', v:counts.NI, color: conf.colors.NI},
+    {k:'EM', v:counts.EM, color: conf.colors.EM},
+    {k:'CO', v:counts.CO, color: conf.colors.CO}
+  ];
+
+  // título
+  ctx.fillStyle = conf.textColor || '#cfeee0';
+  ctx.font = '600 13px ' + conf.font;
+  ctx.textAlign = 'center';
+  ctx.fillText('Distribuição por status', cx, 18);
+
+  // pizza
+  let start = -Math.PI / 2;
+  arcs.forEach(ar=>{
+    const ang = (ar.v / total) * Math.PI * 2;
+    ctx.beginPath();
+    ctx.moveTo(cx, cy);
+    ctx.arc(cx, cy, r, start, start + ang);
+    ctx.closePath();
+    ctx.fillStyle = ar.color;
+    ctx.fill();
+    start += ang;
+  });
+
+  // legenda
+  let lx = drawW + 14;
+  let ly = cy - 18;
+
+  ctx.textAlign = 'left';
+  ctx.font = '12px ' + conf.font;
+
+  arcs.forEach(ar=>{
+    const pct = Math.round((ar.v / total) * 100);
+    ctx.fillStyle = ar.color;
+    ctx.fillRect(lx, ly - 8, 12, 8);
+
+    ctx.fillStyle = conf.textColor || '#cfeee0';
+    ctx.fillText(`${labelFromKey(ar.k)} (${pct}%)`, lx + 18, ly);
+
+    ly += 18;
+  });
+}
+
+
+function drawBar(){
+  const c = document.getElementById('barChart'); if(!c) return;
+  const ctx = c.getContext('2d'); c.width = c.clientWidth * devicePixelRatio; c.height = c.clientHeight * devicePixelRatio;
+  ctx.setTransform(devicePixelRatio,0,0,devicePixelRatio,0,0);
+  const w = c.clientWidth, h = c.clientHeight, pad = 28;
+
+
+// espaço máximo para legenda (nunca quebra layout)
+const legendSpace = Math.min(200, w * 0.4);
+
+// largura útil real do gráfico
+const drawW = Math.max(120, w - legendSpace);
+
+// centro puxado para a esquerda
+const cx = drawW / 2;
+const cy = h / 2;
+
+// raio seguro
+const r = Math.min(drawW, h) / 3;
+
+
+  ctx.clearRect(0,0,w,h);
+  ctx.fillStyle = conf.textColor || '#cfeee0'; ctx.font = '600 13px ' + conf.font; ctx.textAlign = 'left'; ctx.fillText('Tarefas por responsável', 8, 16);
+  const counts = {}; conf.Responsáveis.forEach(r=>counts[r]=0); tasks.forEach(t=>{ if(!counts[t.resp]) counts[t.resp]=0; counts[t.resp]++; });
+  const names = Object.keys(counts); if(names.length===0) return;
+  const max = Math.max(...Object.values(counts),1); const slot = (w - pad*2) / names.length; const barW = slot * 0.6; let x = pad;
+  names.forEach((n, idx)=>{ const val = counts[n]; const barH = (h - 60) * (val/max); ctx.fillStyle = conf.colors.EM; ctx.fillRect(x, h-24-barH, barW, barH); ctx.fillStyle = conf.textColor || '#cfeee0'; ctx.font = '11px ' + conf.font; ctx.textAlign = 'center'; ctx.fillText(n, x + barW/2, h-6); ctx.fillText(String(counts[n]), x + barW/2, h-28-barH); x += slot; });
+}
+
+function drawLine(){
+  const c = document.getElementById('lineChart'); if(!c) return;
+  const ctx = c.getContext('2d'); c.width = c.clientWidth * devicePixelRatio; c.height = c.clientHeight * devicePixelRatio;
+  ctx.setTransform(devicePixelRatio,0,0,devicePixelRatio,0,0);
+  const w = c.clientWidth, h = c.clientHeight, pad = 36;
+  ctx.clearRect(0,0,w,h);
+  ctx.fillStyle = conf.textColor || '#cfeee0'; ctx.font = '600 13px ' + conf.font; ctx.textAlign = 'left'; ctx.fillText('Tarefas por mês (criadas)', 8, 16);
+  if(tasks.length===0) return;
+  const counts = {};
+  tasks.forEach(t=>{ const d = t.created ? t.created.slice(0,7) : todayISO().slice(0,7); counts[d] = (counts[d]||0) + 1; });
+  const months = Object.keys(counts).sort(); const labels = months.slice(-6); if(labels.length===0) return;
+  const vals = labels.map(l=>counts[l]||0); const max = Math.max(...vals,1);
+  const stepX = (w - pad*2) / (labels.length-1 || 1);
+  ctx.strokeStyle = conf.colors.EM; ctx.lineWidth = 2; ctx.beginPath();
+  labels.forEach((lab, i)=>{ const x = pad + (i * stepX); const y = h - pad - ( (h - pad*2) * (vals[i] / max) ); if(i===0) ctx.moveTo(x,y); else ctx.lineTo(x,y); ctx.fillStyle = conf.colors.CO; ctx.fillRect(x-3, y-3, 6, 6); }); ctx.stroke();
+  ctx.fillStyle = conf.textColor || '#cfeee0'; ctx.font = '11px ' + conf.font; ctx.textAlign = 'center';
+  labels.forEach((lab, i)=>{ const x = pad + (i * stepX); ctx.fillText(lab.replace('-','/'), x, h - 8); });
+}
+
+/* Export / Backup / Import */
+function exportCSV(){
+  if(tasks.length===0){ alert('Não há tarefas para exportar'); return; }
+  const rows = [['Título','Responsável','Status','Início','Previsão','Concluído','Criado','Descrição']];
+  tasks.forEach(t=> rows.push([t.titulo, t.resp, labelFromKey(t.status), t.start||'', t.prazo||'', t.completedAt||'', t.created||'', t.desc||'']));
+  const csv = rows.map(r=> r.map(cell=> `"${String(cell||'').replace(/"/g,'""')}"`).join(',')).join('\n');
+  const blob = new Blob([csv], {type:'text/csv;charset=utf-8;'}); const url = URL.createObjectURL(blob);
+  const a = document.createElement('a'); a.href = url; a.download = 'tarefas_export.csv'; a.click(); URL.revokeObjectURL(url);
+}
+
+function downloadBackup(){
+  const data = { tasks, conf, exportedAt: new Date().toISOString() }; const blob = new Blob([JSON.stringify(data, null, 2)], {type:'application/json'});
+  const url = URL.createObjectURL(blob); const a = document.createElement('a'); a.href = url; a.download='tarefas_backup.json'; a.click(); URL.revokeObjectURL(url);
+}
+
+function importBackup(){
+  const input = document.createElement('input'); input.type='file'; input.accept='.json';
+  input.onchange = e=>{
+    const f = e.target.files[0]; if(!f) return;
+    const reader = new FileReader();
+    reader.onload = ev=>{
+      try{
+        const obj = JSON.parse(ev.target.result);
+        if(obj.tasks && Array.isArray(obj.tasks)) tasks = obj.tasks;
+        if(obj.conf && typeof obj.conf === 'object') conf = Object.assign({}, conf, obj.conf);
+        save(); applyConfToUi(); populateResponsáveis(); render(); drawCharts();
+        alert('Backup importado com sucesso.');
+      }catch(err){ alert('Arquivo inválido.'); }
+    };
+    reader.readAsText(f);
+  };
+  input.click();
+}
+
+
+/* ===== GARANTE ESTRUTURA DAS CONFIGURAÇÕES ===== */
+window.conf = window.conf || {};
+
+conf.titleText = conf.titleText || '';
+conf.subText = conf.subText || '';
+conf.font = conf.font || 'Inter, system-ui, Arial';
+conf.fontSize = conf.fontSize || 14;
+
+conf.bg = conf.bg || {
+  a: '#042017',
+  b: '#063426',
+  c: '#0b2f22'
+};
+
+conf.colors = conf.colors || {
+  NI: '#ff5f6d',
+  EM: '#ffd166',
+  CO: '#62d196'
+};
+
+conf.textColor = conf.textColor || '#e8f7f1';
+conf.titleColor = conf.titleColor || conf.colors.EM;
+
+conf.compactCards = !!conf.compactCards;
+conf.showShadows = !!conf.showShadows;
+
+conf.Responsáveis = Array.isArray(conf.Responsáveis)
+  ? conf.Responsáveis
+  : [];
+
+/* Drawer wiring */
+const drawer = document.getElementById('drawer');
+document.getElementById('btnOpenSettings').addEventListener('click', ()=>{ openDrawer(); });
+document.getElementById('btnCloseDrawer').addEventListener('click', ()=>{ closeDrawer(); });
+
+document.getElementById('btnRestore').addEventListener('click', ()=>{ load(); alert('Configurações recarregadas.'); });
+document.getElementById('btnResetDefaults').addEventListener('click', ()=>{ if(confirm('Restaurar padrões?')){ resetDefaults(); } });
+
+function openDrawer(){
+  document.getElementById('cfgTitle').value = conf.titleText || '';
+  document.getElementById('cfgSub').value = conf.subText || '';
+  document.getElementById('fontSelectDrawer').value = conf.font || 'Inter, system-ui, Arial';
+  document.getElementById('fontSizeDrawer').value = conf.fontSize || 14;
+  document.getElementById('bg1').value = conf.bg.a || '#042017';
+  document.getElementById('bg2').value = conf.bg.b || '#063426';
+  document.getElementById('bg3').value = conf.bg.c || '#0b2f22';
+  document.getElementById('colorNI').value = conf.colors.NI || '#ff5f6d';
+  document.getElementById('colorEM').value = conf.colors.EM || '#ffd166';
+  document.getElementById('colorCO').value = conf.colors.CO || '#62d196';
+  document.getElementById('textColor').value = conf.textColor || '#e8f7f1';
+  document.getElementById('titleColor').value = conf.titleColor || conf.colors.EM;
+  document.getElementById('compactCards').checked = !!conf.compactCards;
+  document.getElementById('showShadows').checked = !!conf.showShadows;
+  document.getElementById('respListDrawer').value = conf.Responsáveis.join(', ');
+  updatePreviewFromDrawer();
+  drawer.classList.add('show'); drawer.setAttribute('aria-hidden','false');
+}
+
+function closeDrawer(){ drawer.classList.remove('show'); drawer.setAttribute('aria-hidden','true'); }
+
+function updatePreviewFromDrawer(){
+  const pvTitle = document.getElementById('previewTitle');
+  const pvSub = document.getElementById('previewSub');
+  const pvLogo = document.getElementById('previewLogo');
+  const t = document.getElementById('cfgTitle').value;
+  const s = document.getElementById('cfgSub').value;
+  pvTitle.textContent = t || conf.titleText;
+  pvSub.textContent = s || conf.subText;
+  const a = document.getElementById('bg1').value;
+  const b = document.getElementById('bg2').value;
+  const c = document.getElementById('bg3').value;
+  document.getElementById('preview').style.background = `linear-gradient(135deg, ${a} 0%, ${b} 45%, ${c} 100%)`;
+  const fileIn = document.getElementById('logoFile');
+  if(fileIn && fileIn.files && fileIn.files[0]){
+    const f = fileIn.files[0];
+    const reader = new FileReader();
+    reader.onload = ev => { pvLogo.style.backgroundImage = `url(${ev.target.result})`; pvLogo.style.backgroundSize='cover'; pvLogo.textContent=''; };
+    reader.readAsDataURL(f);
+  } else if(conf.logoDataUrl){
+    pvLogo.style.backgroundImage = `url(${conf.logoDataUrl})`;
+ pvLogo.style.backgroundSize = 'contain';  // mantém proporção
+pvLogo.style.backgroundPosition = 'center';
+pvLogo.style.backgroundRepeat = 'no-repeat';
+
+  } else { pvLogo.style.backgroundImage='none'; pvLogo.textContent='PL'; }
+}
+
+
+function applySettingsToConf(){
+  try{
+    conf.titleText = document.getElementById('cfgTitle').value || conf.titleText;
+    conf.subText   = document.getElementById('cfgSub').value   || conf.subText;
+
+    conf.font = document.getElementById('fontSelectDrawer').value || conf.font;
+    const fs = parseInt(document.getElementById('fontSizeDrawer').value, 10);
+    if(!isNaN(fs)) conf.fontSize = fs;
+
+    conf.bg = {
+      a: document.getElementById('bg1').value,
+      b: document.getElementById('bg2').value,
+      c: document.getElementById('bg3').value
+    };
+
+    conf.colors = {
+      NI: document.getElementById('colorNI').value,
+      EM: document.getElementById('colorEM').value,
+      CO: document.getElementById('colorCO').value
+    };
+
+    conf.textColor  = document.getElementById('textColor').value;
+    conf.titleColor = document.getElementById('titleColor').value;
+
+// responsáveis (aceita vírgula, ponto e vírgula ou quebra de linha)
+const rawResp = document.getElementById('respListDrawer').value || '';
+conf.Responsáveis = rawResp
+  .split(/[,;\n]/)      // separa por vírgula, ponto e vírgula ou quebra de linha
+  .map(r => r.trim())   // remove espaços extras
+  .filter(Boolean);     // remove strings vazias
+
+
+
+    conf.compactCards = document.getElementById('compactCards').checked;
+    conf.showShadows  = document.getElementById('showShadows').checked;
+
+    save();
+    applyConfToUi();
+    populateResponsáveis();
+    render();
+    drawCharts();
+
+    // fecha drawer sem erro
+    const drawer = document.getElementById('drawer');
+    drawer.classList.remove('show');
+    drawer.setAttribute('aria-hidden','true');
+
+  }catch(e){
+    console.error('Erro ao aplicar configurações:', e);
+    // ❌ sem alert
+  }
+}
+document.getElementById('btnSaveDrawer')
+  .addEventListener('click', applySettingsToConf);
+
+
+/* Logo immediate read */
+const logoFileInput = document.getElementById('logoFile');
+if(logoFileInput){
+  logoFileInput.addEventListener('change', function(ev){
+    const f = ev.target.files && ev.target.files[0];
+    if(!f) return;
+    const reader = new FileReader();
+    reader.onload = e => {
+      conf.logoDataUrl = e.target.result;
+      const prev = document.getElementById('previewLogo');
+      if(prev){ prev.style.backgroundImage = `url(${conf.logoDataUrl})`; prev.style.backgroundSize='cover'; prev.textContent=''; }
+      applyConfToUi(); save();
+    };
+    reader.readAsDataURL(f);
+  });
+}
+
+/* Defaults */
+function resetDefaults(){
+  conf = {
+    colors: { NI: '#ff5f6d', EM: '#ffd166', CO: '#62d196' },
+    font: 'Inter, system-ui, Arial',
+    fontSize: 14,
+    Responsáveis: ['Lucas','João','Maria'],
+    bg: { a: '#042017', b: '#063426', c: '#0b2f22' },
+    compactCards: false,
+    showShadows: true,
+    logoDataUrl: '',
+    titleText: 'Gerenciamento de Projetos',
+    subText: 'Gerenciador · painel rápido'
+  };
+  save(); applyConfToUi(); populateResponsáveis(); render(); drawCharts(); alert('Padrões restaurados.');
+}
+
+/* Wiring UI events */
+document.getElementById('btnNew').addEventListener('click', ()=>document.getElementById('tTitulo').focus());
+document.getElementById('btnExport').addEventListener('click', exportCSV);
+document.getElementById('btnBackup').addEventListener('click', downloadBackup);
+document.getElementById('btnImport').addEventListener('click', importBackup);
+document.getElementById('btnClear').addEventListener('click', ()=>{ if(confirm('Limpar todas as tarefas?')){ tasks=[]; save(); render(); drawCharts(); }});
+window.addEventListener('resize', ()=>{ drawCharts(); });
+document.getElementById('btnSaveInline').addEventListener('click', addTaskFromForm);
+
+window.addEventListener('keydown', (e)=>{ if(e.key.toLowerCase()==='n' && (document.activeElement.tagName!=='INPUT' && document.activeElement.tagName!=='TEXTAREA')){ e.preventDefault(); document.getElementById('tTitulo').focus(); } });
+
+window.addEventListener('storage', (e)=>{ if(e.key === STORAGE_KEY || e.key===CONF_KEY) load(); });
+
+window.addEventListener('click', (e)=>{ const menu = document.getElementById('assignMenu'); if(menu && !menu.contains(e.target)) menu.remove(); });
+
+function labelFromKey(k){ if(k==='NI') return 'Não iniciado'; if(k==='EM') return 'Em andamento'; if(k==='CO') return 'Concluído'; return k; }
+
+/* Init */
+load();
+drawCharts();
+
+function sendTaskEmail(id){
+
+  const t = tasks.find(x=>x.id===id);
+  if(!t) return;
+
+  const status = labelFromKey(t.status);
+
+  const html = `
+  <div style="font-family:${conf.font};padding:20px">
+
+<div style="text-align:center; margin-bottom:60px;">
+  ${conf.logoDataUrl ? `
+    <img 
+      src="${conf.logoDataUrl}"
+      style="
+        height:200px;
+        max-width:100%;
+        object-fit:contain;
+        margin-bottom:30px;
+      "
+    >
+  ` : ''}
+  
+  <h2 style="
+    font-size:72px;
+    margin:0;
+    font-weight:700;
+  ">
+    ${conf.titleText}
+  </h2>
+</div>
+
+
+    <h3>Resumo da tarefa</h3>
+
+    <table style="width:100%;border-collapse:collapse">
+      <tr><td><b>Título</b></td><td>${t.titulo}</td></tr>
+      <tr><td><b>Status</b></td><td>${status}</td></tr>
+      <tr><td><b>Responsáveis</b></td><td>${t.resp}</td></tr>
+      <tr><td><b>Início</b></td><td>${formatDate(t.start)}</td></tr>
+      <tr><td><b>Prazo</b></td><td>${formatDate(t.prazo)}</td></tr>
+      <tr><td><b>Descrição</b></td><td>${t.desc || '-'}</td></tr>
+    </table>
+
+    <p style="margin-top:20px">
+    Prezado,<br><br>
+    Segue atualização do projeto conforme reunião realizada.<br>
+    </p>
+
+  </div>
+  `;
+
+  const subject = `${conf.titleText} - ${t.titulo}`;
+
+window.location.href =
+  `mailto:?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(
+`Prezado(a),
+
+Espero que esteja bem.
+
+Segue abaixo o resumo do que tratamos hoje:
+
+----------------------------------------
+TÍTULO: ${t.titulo}
+STATUS: ${labelFromKey(t.status)}
+Responsáveis: ${t.resp}
+INÍCIO: ${formatDate(t.start)}
+PRAZO: ${formatDate(t.prazo)}
+
+DESCRIÇÃO:
+${t.desc || '-'}
+
+----------------------------------------
+
+Fico à disposição.`
+)}`;
+
+
+  const newWindow = window.open();
+  newWindow.document.write(html);
+}
+
+async function exportTaskPDF(id){
+
+  const t = tasks.find(x=>x.id===id);
+  if(!t) return;
+
+  const container = document.createElement("div");
+
+  container.innerHTML = `
+  <div style="
+  font-family:${conf.font};
+  padding:300px;
+  max-width:1700px;
+  margin:0 auto;
+  color:#000;
+  font-size:64px;
+  line-height:1.6;
+">
+
+
+
+    <div style="text-align:center">
+
+      ${conf.logoDataUrl ? `
+  <img 
+    src="${conf.logoDataUrl}"
+    style="
+      height:120px;
+      max-width:100%;
+      object-fit:contain;
+      margin-bottom:15px;
+    "
+  >
+` : ''}
+
+
+     <h2 style="font-size:22px;margin-bottom:10px;color:#000">
+  ${conf.titleText}
+
+</h2>
+
+    </div>
+
+<h3 style="font-size:18px;margin-top:30px;color:#000"
+  Relatório da tarefa
+</h3>
+
+
+    <<table style="
+  width:100%;
+  border-collapse:collapse;
+  font-size:14px;
+">
+
+<tr>
+  <td style="padding:10px;border:1px solid #ccc;font-weight:bold;width:30%">
+    Título
+  </td>
+  <td style="padding:10px;border:1px solid #ccc">
+    ${t.titulo}
+  </td>
+</tr>
+
+<tr>
+  <td style="padding:10px;border:1px solid #ccc;font-weight:bold">
+    Status
+  </td>
+  <td style="padding:10px;border:1px solid #ccc">
+    ${labelFromKey(t.status)}
+  </td>
+</tr>
+
+<tr>
+  <td style="padding:10px;border:1px solid #ccc;font-weight:bold">
+    Responsáveis
+  </td>
+  <td style="padding:10px;border:1px solid #ccc">
+    ${t.resp}
+  </td>
+</tr>
+
+<tr>
+  <td style="padding:10px;border:1px solid #ccc;font-weight:bold">
+    Início
+  </td>
+  <td style="padding:10px;border:1px solid #ccc">
+    ${formatDate(t.start)}
+  </td>
+</tr>
+
+<tr>
+  <td style="padding:10px;border:1px solid #ccc;font-weight:bold">
+    Prazo
+  </td>
+  <td style="padding:10px;border:1px solid #ccc">
+    ${formatDate(t.prazo)}
+  </td>
+</tr>
+
+<tr>
+  <td style="padding:10px;border:1px solid #ccc;font-weight:bold;vertical-align:top">
+    Descrição
+  </td>
+  <td style="padding:10px;border:1px solid #ccc">
+    ${t.desc || '-'}
+  </td>
+</tr>
+
+    </table>
+
+  </div>
+  `;
+
+  document.body.appendChild(container);
+
+ const canvas = await html2canvas(container, {
+  scale: 3,          // 🔥 AQUI ESTÁ O SCALE
+  backgroundColor: "#ffffff",
+  useCORS: true
+});
+
+
+  const img = canvas.toDataURL("image/png");
+
+  const { jsPDF } = window.jspdf;
+  const pdf = new jsPDF('p', 'mm', 'a4');
+
+
+  pdf.addImage(img, 'PNG', 10, 10, 195, 0);
+
+  pdf.save(`Tarefa_${t.titulo}.pdf`);
+
+  container.remove();
+}
+
+function exportExcel(){
+
+  const data = tasks.map(t => ({
+    Titulo: t.titulo,
+    Status: labelFromKey(t.status),
+    Responsáveis: t.resp,
+    Inicio: t.start,
+    Prazo: t.prazo,
+    Concluido: t.completedAt,
+    Descricao: t.desc
+  }));
+
+  const ws = XLSX.utils.json_to_sheet(data);
+
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, "Tarefas");
+
+  XLSX.writeFile(wb, "Tarefas.xlsx");
+}
+
+// ===== AUTO SAVE =====
+let autosaveTimer;
+document.addEventListener('input', () => {
+  clearTimeout(autosaveTimer);
+  autosaveTimer = setTimeout(save, 1200);
+});
+
+function isOverdue(t){
+  return t.prazo && t.prazo < todayISO() && t.status !== 'CO';
+}
+
+function getStatusLabel(status){
+  if(status === 'NI') return 'Não iniciado';
+  if(status === 'EM') return 'Em andamento';
+  if(status === 'CO') return 'Concluído';
+  return 'Não iniciado';
+}
+function toggleStatus(taskId){
+  const task = tasks.find(t => t.id === taskId);
+  if(!task) return;
+
+  if(task.status === 'NI'){
+    task.status = 'EM';
+  }else if(task.status === 'EM'){
+    task.status = 'CO';
+  }else{
+    task.status = 'NI';
+  }
+
+  saveTasks();
+  renderTasks();
+}
+
+function toggleStatus(taskId) {
+  const task = tasks.find(t => t.id === taskId);
+  if (!task) return;
+
+  if (task.status === 'NI') {
+    task.status = 'EM';
+  } else if (task.status === 'EM') {
+    task.status = 'CO';
+  } else {
+    task.status = 'NI';
+  }
+
+  saveTasks();   // mantém seus dados
+  renderTasks(); // redesenha a tela
+}
+const STATUS_MAP = {
+  NI: 'Não iniciada',
+  EM: 'Em andamento',
+  CO: 'Concluída'
+};
+
+function toggleStatus(id){
+  const t = tasks.find(x => x.id === id);
+  if(!t) return;
+
+  // ciclo de status
+  if(t.status === 'NI'){
+    t.status = 'EM';
+  }else if(t.status === 'EM'){
+    t.status = 'CO';
+  }else{
+    t.status = 'NI';
+  }
+
+  save();
+  render();
+}
+
+
+document.addEventListener('DOMContentLoaded', () => {
+  load();
+});
+
+document.getElementById('logoFile').addEventListener('change', e => {
+  const file = e.target.files[0];
+  if (!file) return;
+
+  const reader = new FileReader();
+  reader.onload = () => {
+    conf.logoDataUrl = reader.result;
+    save();
+    applyConfToUi();
+  };
+  reader.readAsDataURL(file);
+});
+
+</script>
+</body>
+</html>
+
