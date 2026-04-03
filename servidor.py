@@ -59,7 +59,6 @@ def init_db():
         conn.commit()
         migracoes = [
             "ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS email TEXT",
-            "ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS ativo BOOLEAN DEFAULT TRUE",
             "ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS expira DATE",
             "ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS criado_em TIMESTAMP DEFAULT NOW()",
             "ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS ultimo_acesso TIMESTAMP",
@@ -72,6 +71,27 @@ def init_db():
                 conn.commit()
             except Exception:
                 conn.rollback()
+
+        # Corrige coluna ativo: banco antigo criava como INTEGER, novo precisa de BOOLEAN
+        try:
+            cur.execute("""
+                SELECT data_type FROM information_schema.columns
+                WHERE table_name = 'usuarios' AND column_name = 'ativo'
+            """)
+            row = cur.fetchone()
+            if row is None:
+                cur.execute("ALTER TABLE usuarios ADD COLUMN ativo BOOLEAN DEFAULT TRUE")
+                conn.commit()
+                print("[DB] Coluna ativo criada como BOOLEAN")
+            elif row['data_type'] in ('integer', 'smallint', 'bigint'):
+                cur.execute("ALTER TABLE usuarios ALTER COLUMN ativo TYPE BOOLEAN USING ativo::boolean")
+                conn.commit()
+                print("[DB] Coluna ativo convertida INTEGER -> BOOLEAN")
+            else:
+                print(f"[DB] Coluna ativo OK ({row['data_type']})")
+        except Exception as e:
+            conn.rollback()
+            print(f"[DB] Aviso ativo: {e}")
         cur.close()
         conn.close()
         print("[DB] OK")
