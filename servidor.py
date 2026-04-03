@@ -724,9 +724,9 @@ def admin_criar():
         for _ in range(10):
             try:
                 cur.execute(
-                    "INSERT INTO usuarios (nome, email, chave, expira, ativo) "
-                    "VALUES (%s, %s, %s, %s, %s) RETURNING chave",
-                    (nome, email, chave, exp, 1)
+                    "INSERT INTO usuarios (nome, email, chave, expira, ativo, criado_em) "
+                    "VALUES (%s, %s, %s, %s, %s, %s) RETURNING chave",
+                    (nome, email, chave, exp, 1, datetime.now())
                 )
                 chave = cur.fetchone()['chave']
                 conn.commit()
