@@ -204,12 +204,21 @@ async function carregar(){
     document.getElementById('tabela').innerHTML=d.usuarios.map(u=>`
       <tr>
         <td><b>${u.nome}</b><br><small style="color:var(--muted);font-size:11px">${u.email||''}</small></td>
-        <td><span class="chave" onclick="cp('${u.chave}')">${u.chave}</span></td>
+        <td><span class="chave btn-cp" data-chave="${u.chave}">${u.chave}</span></td>
         <td style="color:${venc(u.expira)?'var(--red)':'var(--muted)'}">${u.expira?fD(u.expira):'Sem limite'}</td>
         <td style="font-size:12px;color:var(--muted)">${fDT(u.ultimo_acesso)}</td>
-        <td><button class="pill ${u.ativo?'on':'off'}" onclick="toggle('${u.chave}')"><span class="dot ${u.ativo?'don':'doff'}"></span>${u.ativo?'ATIVO':'BLOQUEADO'}</button></td>
-        <td><div class="acts"><button class="del" onclick="del('${u.chave}')">✕</button></div></td>
+        <td><button class="pill ${u.ativo?'on':'off'} btn-toggle" data-chave="${u.chave}"><span class="dot ${u.ativo?'don':'doff'}"></span>${u.ativo?'ATIVO':'BLOQUEADO'}</button></td>
+        <td><div class="acts"><button class="del btn-del" data-chave="${u.chave}">✕</button></div></td>
       </tr>`).join('');
+
+    // eventos via delegação — funciona com qualquer chave, mesmo com caracteres especiais
+    document.getElementById('tabela').querySelectorAll('.btn-cp').forEach(el=>
+      el.addEventListener('click',()=>cp(el.dataset.chave)));
+    document.getElementById('tabela').querySelectorAll('.btn-toggle').forEach(el=>
+      el.addEventListener('click',()=>toggle(el.dataset.chave)));
+    document.getElementById('tabela').querySelectorAll('.btn-del').forEach(el=>
+      el.addEventListener('click',()=>excluir(el.dataset.chave)));
+
     document.getElementById('logs').innerHTML=d.logs.length
       ?d.logs.map(l=>`<div>[${fDT(l.momento)}] <span class="${l.sucesso?'lok':'lfail'}">${l.sucesso?'✓ OK':'✗ NEGADO'}</span> — ${l.chave}</div>`).join('')
       :'<span style="color:var(--muted)">Nenhum acesso ainda.</span>';
@@ -221,14 +230,27 @@ async function criar(){
   const email=document.getElementById('email').value.trim();
   const dias=document.getElementById('dias').value;
   if(!nome){toast('⚠ Nome obrigatório');return;}
-  const r=await fetch('/admin/criar-auto',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({nome,email,dias})});
-  const data=await r.json();
-  if(data.ok){toast('✓ Chave: '+data.chave);document.getElementById('nome').value='';document.getElementById('email').value='';carregar();}
-  else toast('✗ '+(data.msg||'Erro desconhecido'));
+  try{
+    const r=await fetch('/admin/criar-auto',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({nome,email,dias})});
+    const data=await r.json();
+    if(data.ok){toast('✓ Chave: '+data.chave);document.getElementById('nome').value='';document.getElementById('email').value='';carregar();}
+    else toast('✗ '+(data.msg||'Erro desconhecido'));
+  }catch(e){toast('✗ Erro de conexão');}
 }
-async function toggle(chave){await fetch('/admin/toggle',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({chave})});carregar();}
-async function del(chave){if(!confirm('Remover este cliente?'))return;await fetch('/admin/deletar',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({chave})});carregar();}
-async function bloquearTodos(){if(!confirm('Bloquear TODOS?'))return;await fetch('/admin/bloquear-todos',{method:'POST'});toast('🔒 Todos bloqueados');carregar();}
+async function toggle(chave){
+  try{await fetch('/admin/toggle',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({chave})});carregar();}
+  catch(e){toast('✗ Erro ao atualizar');}
+}
+async function excluir(chave){
+  if(!confirm('Remover este cliente permanentemente?'))return;
+  try{await fetch('/admin/deletar',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({chave})});carregar();}
+  catch(e){toast('✗ Erro ao remover');}
+}
+async function bloquearTodos(){
+  if(!confirm('Bloquear TODOS os clientes ativos?'))return;
+  try{await fetch('/admin/bloquear-todos',{method:'POST'});toast('🔒 Todos bloqueados');carregar();}
+  catch(e){toast('✗ Erro');}
+}
 carregar();setInterval(carregar,15000);
 </script>
 </body>
