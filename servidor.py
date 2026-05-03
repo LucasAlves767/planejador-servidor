@@ -9,7 +9,7 @@ app = Flask(__name__)
 # ══════════════════════════════════════════
 #  CONFIG
 #  No Render → Environment Variables, coloque:
-#  DATABASE_URL = postgresql://postgres:[3HdV2,WYVktfrQS]@db.xxx.supabase.co:5432/postgres
+#  DATABASE_URL = postgresql://postgres:3HdV2,WYVktfrQS@db.xxx.supabase.co:5432/postgres
 #  ADMIN_TOKEN  = sua-senha-aqui  (opcional)
 # ══════════════════════════════════════════
 DATABASE_URL = os.environ.get("DATABASE_URL", "").replace("postgres://", "postgresql://", 1)
