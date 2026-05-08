@@ -2,12 +2,14 @@ from flask import Flask, request, jsonify, render_template_string, send_file, re
 import psycopg2
 import psycopg2.extras
 from datetime import datetime, timedelta, date
-import os, random, string, csv, io
+import os, random, string, csv, io, hashlib, hmac, secrets, time
 
 app = Flask(__name__)
 
 DATABASE_URL = os.environ.get("DATABASE_URL", "").replace("postgres://", "postgresql://", 1)
 ADMIN_TOKEN  = os.environ.get("ADMIN_TOKEN", "lucs2025")
+# Segredo para assinar os tokens — defina TOKEN_SECRET no Render como variável de ambiente
+TOKEN_SECRET = os.environ.get("TOKEN_SECRET", "lucs-secret-2025-mude-isso")
 
 def get_db():
     if not DATABASE_URL:
@@ -34,6 +36,53 @@ def row_to_dict(row):
 def nova_chave():
     chars = string.ascii_uppercase + string.digits
     return "LUCS-" + "-".join(''.join(random.choices(chars, k=4)) for _ in range(3))
+
+# ── Gera token assinado com HMAC-SHA256 ──────────────────────────────────────
+def gerar_token(chave: str, hwid: str | None, expira_date) -> dict:
+    """
+    Retorna {'access_token': str, 'data_expiracao': str | None, 'dias_restantes': int | None}
+    O token é válido por 24h e contém: chave + hwid + timestamp de criação + hash de integridade.
+    """
+    ts_criacao = int(time.time())
+    ts_expira  = int(datetime.combine(expira_date, datetime.min.time()).timestamp()) if expira_date else 0
+
+    payload = f"{chave}|{hwid or 'none'}|{ts_criacao}|{ts_expira}"
+    sig = hmac.new(TOKEN_SECRET.encode(), payload.encode(), hashlib.sha256).hexdigest()[:16]
+    token = f"{payload}|{sig}"
+    # Codifica em base-hex para não ter caracteres estranhos
+    access_token = token.encode().hex()
+
+    if expira_date:
+        dias_restantes = (expira_date - datetime.now().date()).days
+        data_expiracao = expira_date.isoformat()
+    else:
+        dias_restantes = None
+        data_expiracao = None
+
+    return {
+        "access_token":   access_token,
+        "data_expiracao": data_expiracao,
+        "dias_restantes": dias_restantes,
+    }
+
+def verificar_token(token_hex: str) -> dict | None:
+    """Valida um access_token. Retorna payload dict ou None se inválido/expirado."""
+    try:
+        token = bytes.fromhex(token_hex).decode()
+        parts = token.split("|")
+        if len(parts) != 5:
+            return None
+        chave, hwid, ts_criacao, ts_expira, sig_recv = parts
+        payload = f"{chave}|{hwid}|{ts_criacao}|{ts_expira}"
+        sig_calc = hmac.new(TOKEN_SECRET.encode(), payload.encode(), hashlib.sha256).hexdigest()[:16]
+        if not hmac.compare_digest(sig_recv, sig_calc):
+            return None
+        # Token expira em 24h
+        if int(time.time()) - int(ts_criacao) > 86400:
+            return None
+        return {"chave": chave, "hwid": hwid, "ts_expira": int(ts_expira)}
+    except Exception:
+        return None
 
 def init_db():
     try:
@@ -66,7 +115,7 @@ def init_db():
             );
         """)
         conn.commit()
-        for sql in [
+        migrations = [
             "ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS email TEXT",
             "ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS empresa TEXT",
             "ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS expira DATE",
@@ -75,12 +124,15 @@ def init_db():
             "ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS criado_em TIMESTAMP DEFAULT NOW()",
             "ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS ultimo_acesso TIMESTAMP",
             "ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS ip_ultimo TEXT",
+            # ── NOVA COLUNA HWID ──
+            "ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS hwid TEXT",
             "ALTER TABLE logs ADD COLUMN IF NOT EXISTS nome TEXT",
             "ALTER TABLE logs ADD COLUMN IF NOT EXISTS empresa TEXT",
             "ALTER TABLE logs ADD COLUMN IF NOT EXISTS acao TEXT",
             "ALTER TABLE logs ADD COLUMN IF NOT EXISTS ip TEXT",
             "ALTER TABLE logs ADD COLUMN IF NOT EXISTS detalhe TEXT",
-        ]:
+        ]
+        for sql in migrations:
             try: cur.execute(sql); conn.commit()
             except: conn.rollback()
         try:
@@ -116,119 +168,52 @@ HTML = r"""<!DOCTYPE html>
   --bg4:    #1f2638;
   --line:   rgba(255,255,255,.06);
   --line2:  rgba(255,255,255,.11);
-
   --gold:       #e8a020;
   --gold-lt:    #f5c060;
   --gold-bg:    rgba(232,160,32,.09);
   --gold-glow:  rgba(232,160,32,.22);
-
   --cyan:       #00c8d4;
   --cyan-lt:    #60e8f0;
   --cyan-bg:    rgba(0,200,212,.08);
   --cyan-glow:  rgba(0,200,212,.18);
-
   --green:      #00c87a;
   --green-bg:   rgba(0,200,122,.08);
   --green-glow: rgba(0,200,122,.2);
-
   --red:        #e03040;
   --red-bg:     rgba(224,48,64,.08);
   --red-glow:   rgba(224,48,64,.2);
-
   --txt:    #e8ecf4;
   --txt2:   #8a94a8;
   --txt3:   #5a6278;
   --txt4:   #363d52;
-
-  --r:  10px;
-  --r2: 6px;
-  --r3: 4px;
+  --r:  10px;--r2: 6px;--r3: 4px;
 }
-
 html{scroll-behavior:smooth}
-body{
-  font-family:'IBM Plex Sans',sans-serif;
-  background:var(--bg);color:var(--txt);
-  min-height:100vh;overflow-x:hidden;
-  line-height:1.5;
-}
-
-/* Subtle scanline texture */
-body::before{
-  content:'';position:fixed;inset:0;pointer-events:none;z-index:0;
-  background:
-    repeating-linear-gradient(0deg,transparent,transparent 2px,rgba(0,0,0,.03) 2px,rgba(0,0,0,.03) 4px),
-    radial-gradient(ellipse 1200px 700px at 80% -100px, rgba(0,200,212,.04), transparent),
-    radial-gradient(ellipse 800px 600px at -10% 90%, rgba(232,160,32,.03), transparent);
-}
-
+body{font-family:'IBM Plex Sans',sans-serif;background:var(--bg);color:var(--txt);min-height:100vh;overflow-x:hidden;line-height:1.5}
+body::before{content:'';position:fixed;inset:0;pointer-events:none;z-index:0;background:repeating-linear-gradient(0deg,transparent,transparent 2px,rgba(0,0,0,.03) 2px,rgba(0,0,0,.03) 4px),radial-gradient(ellipse 1200px 700px at 80% -100px,rgba(0,200,212,.04),transparent),radial-gradient(ellipse 800px 600px at -10% 90%,rgba(232,160,32,.03),transparent)}
 ::-webkit-scrollbar{width:5px;height:5px}
 ::-webkit-scrollbar-track{background:var(--bg1)}
 ::-webkit-scrollbar-thumb{background:var(--bg4);border-radius:3px}
-::-webkit-scrollbar-thumb:hover{background:var(--txt4)}
-
-.page{max-width:1480px;margin:0 auto;padding:20px 20px;position:relative;z-index:1}
-
-/* ── TOPBAR ── */
-.topbar{
-  display:flex;align-items:center;justify-content:space-between;
-  background:rgba(12,16,24,.9);
-  border:1px solid var(--line2);
-  border-radius:var(--r);padding:12px 20px;margin-bottom:18px;
-  position:sticky;top:0;z-index:100;backdrop-filter:blur(20px);
-  box-shadow:0 1px 0 rgba(255,255,255,.04), 0 8px 32px rgba(0,0,0,.5);
-}
+.page{max-width:1480px;margin:0 auto;padding:20px;position:relative;z-index:1}
+.topbar{display:flex;align-items:center;justify-content:space-between;background:rgba(12,16,24,.9);border:1px solid var(--line2);border-radius:var(--r);padding:12px 20px;margin-bottom:18px;position:sticky;top:0;z-index:100;backdrop-filter:blur(20px);box-shadow:0 1px 0 rgba(255,255,255,.04),0 8px 32px rgba(0,0,0,.5)}
 .brand{display:flex;align-items:center;gap:14px}
-.brand-mark{
-  width:36px;height:36px;border-radius:8px;flex-shrink:0;
-  background:linear-gradient(135deg,#1a2030 0%,#0e1420 100%);
-  border:1px solid var(--gold-bg);
-  display:flex;align-items:center;justify-content:center;
-  box-shadow:0 0 0 1px rgba(232,160,32,.15), 0 0 20px var(--gold-glow);
-  position:relative;overflow:hidden;
-}
-.brand-mark::after{
-  content:'';position:absolute;inset:0;
-  background:radial-gradient(circle at 40% 35%, rgba(232,160,32,.15), transparent 60%);
-}
+.brand-mark{width:36px;height:36px;border-radius:8px;flex-shrink:0;background:linear-gradient(135deg,#1a2030 0%,#0e1420 100%);border:1px solid var(--gold-bg);display:flex;align-items:center;justify-content:center;box-shadow:0 0 0 1px rgba(232,160,32,.15),0 0 20px var(--gold-glow);position:relative;overflow:hidden}
+.brand-mark::after{content:'';position:absolute;inset:0;background:radial-gradient(circle at 40% 35%,rgba(232,160,32,.15),transparent 60%)}
 .brand-mark svg{position:relative;z-index:1}
-.brand-text{}
-.brand-name{
-  font-family:'IBM Plex Mono',monospace;font-size:13px;font-weight:600;
-  letter-spacing:3px;color:var(--txt);line-height:1.2;
-}
+.brand-name{font-family:'IBM Plex Mono',monospace;font-size:13px;font-weight:600;letter-spacing:3px;color:var(--txt);line-height:1.2}
 .brand-sub{font-size:10px;color:var(--txt3);letter-spacing:1.5px;margin-top:1px;font-family:'IBM Plex Mono',monospace}
-
 .topbar-right{display:flex;align-items:center;gap:10px}
-
-.sys-badge{
-  display:flex;align-items:center;gap:8px;padding:6px 14px;
-  background:var(--bg2);border:1px solid var(--line);border-radius:20px;
-  font-family:'IBM Plex Mono',monospace;font-size:9px;letter-spacing:1.5px;color:var(--txt3);
-}
+.sys-badge{display:flex;align-items:center;gap:8px;padding:6px 14px;background:var(--bg2);border:1px solid var(--line);border-radius:20px;font-family:'IBM Plex Mono',monospace;font-size:9px;letter-spacing:1.5px;color:var(--txt3)}
 .sys-dot{width:6px;height:6px;border-radius:50%;flex-shrink:0}
-.sys-dot.ok  {background:var(--green);box-shadow:0 0 8px var(--green-glow);animation:blink 3s infinite}
-.sys-dot.err {background:var(--red);box-shadow:0 0 8px var(--red-glow);animation:blink 1.2s infinite}
+.sys-dot.ok{background:var(--green);box-shadow:0 0 8px var(--green-glow);animation:blink 3s infinite}
+.sys-dot.err{background:var(--red);box-shadow:0 0 8px var(--red-glow);animation:blink 1.2s infinite}
 .sys-dot.warn{background:var(--gold);animation:blink 2s infinite}
-
 .nav-tabs{display:flex;gap:2px;background:var(--bg2);border:1px solid var(--line);border-radius:var(--r2);padding:3px}
-.nav-tab{
-  padding:5px 16px;border-radius:var(--r3);cursor:pointer;
-  font-family:'IBM Plex Mono',monospace;font-size:9px;letter-spacing:2px;
-  color:var(--txt3);background:transparent;border:none;transition:all .15s;
-  text-decoration:none;display:inline-flex;align-items:center;
-}
+.nav-tab{padding:5px 16px;border-radius:var(--r3);cursor:pointer;font-family:'IBM Plex Mono',monospace;font-size:9px;letter-spacing:2px;color:var(--txt3);background:transparent;border:none;transition:all .15s;text-decoration:none;display:inline-flex;align-items:center}
 .nav-tab:hover{color:var(--txt2);background:rgba(255,255,255,.04)}
 .nav-tab.on{background:var(--gold);color:#0a0a0a;font-weight:600;box-shadow:0 0 12px var(--gold-glow)}
-
-/* ── KPIs ── */
 .kpis{display:grid;grid-template-columns:repeat(6,1fr);gap:12px;margin-bottom:18px}
-.kpi{
-  background:var(--bg1);border:1px solid var(--line);border-radius:var(--r);
-  padding:18px 16px 16px;position:relative;overflow:hidden;
-  animation:fadeUp .4s ease both;transition:border-color .2s,transform .2s;
-  cursor:default;
-}
+.kpi{background:var(--bg1);border:1px solid var(--line);border-radius:var(--r);padding:18px 16px 16px;position:relative;overflow:hidden;animation:fadeUp .4s ease both;transition:border-color .2s,transform .2s;cursor:default}
 .kpi:hover{border-color:var(--line2);transform:translateY(-2px)}
 .kpi-stripe{position:absolute;top:0;left:0;right:0;height:2px;border-radius:2px 2px 0 0}
 .kpi:nth-child(1) .kpi-stripe{background:var(--cyan)}
@@ -237,19 +222,9 @@ body::before{
 .kpi:nth-child(4) .kpi-stripe{background:var(--gold)}
 .kpi:nth-child(5) .kpi-stripe{background:#8b7cf8}
 .kpi:nth-child(6) .kpi-stripe{background:#f06080}
-.kpi-icon{
-  position:absolute;bottom:12px;right:14px;
-  font-size:22px;opacity:.06;line-height:1;
-  font-family:'IBM Plex Mono',monospace;
-}
-.kpi-label{
-  font-family:'IBM Plex Mono',monospace;font-size:8px;letter-spacing:2.5px;
-  color:var(--txt3);margin-bottom:10px;
-}
-.kpi-val{
-  font-family:'IBM Plex Mono',monospace;font-size:32px;font-weight:500;
-  line-height:1;letter-spacing:-1px;color:var(--txt);
-}
+.kpi-icon{position:absolute;bottom:12px;right:14px;font-size:22px;opacity:.06;line-height:1;font-family:'IBM Plex Mono',monospace}
+.kpi-label{font-family:'IBM Plex Mono',monospace;font-size:8px;letter-spacing:2.5px;color:var(--txt3);margin-bottom:10px}
+.kpi-val{font-family:'IBM Plex Mono',monospace;font-size:32px;font-weight:500;line-height:1;letter-spacing:-1px;color:var(--txt)}
 .kpi-sub{font-size:11px;color:var(--txt3);margin-top:6px;font-weight:300}
 .kpi:nth-child(1) .kpi-val{color:var(--cyan)}
 .kpi:nth-child(2) .kpi-val{color:var(--green)}
@@ -257,52 +232,20 @@ body::before{
 .kpi:nth-child(4) .kpi-val{color:var(--gold)}
 .kpi:nth-child(5) .kpi-val{color:#8b7cf8}
 .kpi:nth-child(6) .kpi-val{color:#f06080}
-
-/* ── PANEL ── */
-.panel{
-  background:var(--bg1);border:1px solid var(--line);border-radius:var(--r);
-  overflow:hidden;animation:fadeUp .4s .1s ease both;
-}
-.panel-tabs{
-  display:flex;border-bottom:1px solid var(--line);
-  background:var(--bg2);padding:0 20px;gap:0;
-}
-.ptab{
-  padding:13px 20px;cursor:pointer;border:none;background:transparent;
-  font-family:'IBM Plex Mono',monospace;font-size:9px;letter-spacing:2px;
-  color:var(--txt3);border-bottom:2px solid transparent;margin-bottom:-1px;
-  transition:all .15s;white-space:nowrap;display:flex;align-items:center;gap:7px;
-}
+.panel{background:var(--bg1);border:1px solid var(--line);border-radius:var(--r);overflow:hidden;animation:fadeUp .4s .1s ease both}
+.panel-tabs{display:flex;border-bottom:1px solid var(--line);background:var(--bg2);padding:0 20px;gap:0}
+.ptab{padding:13px 20px;cursor:pointer;border:none;background:transparent;font-family:'IBM Plex Mono',monospace;font-size:9px;letter-spacing:2px;color:var(--txt3);border-bottom:2px solid transparent;margin-bottom:-1px;transition:all .15s;white-space:nowrap;display:flex;align-items:center;gap:7px}
 .ptab:hover:not(.on){color:var(--txt2)}
 .ptab.on{color:var(--gold);border-bottom-color:var(--gold)}
-.ptab svg{opacity:.6}
-.ptab.on svg{opacity:1}
-
+.ptab svg{opacity:.6}.ptab.on svg{opacity:1}
 .tab-body{display:none;padding:22px 20px 28px}
 .tab-body.on{display:block}
-
-/* ── SECTION HEADER ── */
 .sec-hd{display:flex;align-items:center;justify-content:space-between;margin-bottom:18px;flex-wrap:wrap;gap:10px}
 .sec-left{display:flex;align-items:center;gap:10px}
-.sec-title{
-  font-family:'IBM Plex Mono',monospace;font-size:9px;
-  letter-spacing:2.5px;color:var(--txt3);
-}
-.n-badge{
-  padding:2px 10px;border-radius:20px;
-  background:var(--cyan-bg);color:var(--cyan);
-  border:1px solid rgba(0,200,212,.18);
-  font-family:'IBM Plex Mono',monospace;font-size:10px;
-}
+.sec-title{font-family:'IBM Plex Mono',monospace;font-size:9px;letter-spacing:2.5px;color:var(--txt3)}
+.n-badge{padding:2px 10px;border-radius:20px;background:var(--cyan-bg);color:var(--cyan);border:1px solid rgba(0,200,212,.18);font-family:'IBM Plex Mono',monospace;font-size:10px}
 .sec-right{display:flex;gap:6px;flex-wrap:wrap;align-items:center}
-
-/* ── BUTTONS ── */
-.btn{
-  display:inline-flex;align-items:center;gap:6px;
-  padding:7px 14px;border-radius:var(--r2);cursor:pointer;
-  font-family:'IBM Plex Mono',monospace;font-size:9px;letter-spacing:1.5px;
-  border:1px solid transparent;transition:all .15s;white-space:nowrap;font-weight:500;
-}
+.btn{display:inline-flex;align-items:center;gap:6px;padding:7px 14px;border-radius:var(--r2);cursor:pointer;font-family:'IBM Plex Mono',monospace;font-size:9px;letter-spacing:1.5px;border:1px solid transparent;transition:all .15s;white-space:nowrap;font-weight:500}
 .btn-gold{background:var(--gold);color:#0a0a0a;border-color:var(--gold);box-shadow:0 0 16px var(--gold-glow)}
 .btn-gold:hover{background:var(--gold-lt);box-shadow:0 0 24px var(--gold-glow);transform:translateY(-1px)}
 .btn-ghost{background:transparent;color:var(--txt3);border-color:var(--line2)}
@@ -315,52 +258,27 @@ body::before{
 .btn-red:hover{background:rgba(224,48,64,.14)}
 .btn-sm{padding:5px 11px;font-size:8px}
 .btn:disabled{opacity:.35;cursor:not-allowed;transform:none!important}
-
-/* ── TOOLBAR ── */
 .toolbar{display:flex;gap:8px;align-items:center;margin-bottom:14px;flex-wrap:wrap}
 .search-wrap{position:relative;flex:1;min-width:220px}
 .search-wrap .ico{position:absolute;left:11px;top:50%;transform:translateY(-50%);color:var(--txt4);pointer-events:none}
 .search-wrap input{padding-left:34px}
 .filters{display:flex;gap:4px;flex-wrap:wrap}
-.fchip{
-  padding:5px 12px;border-radius:20px;cursor:pointer;
-  font-family:'IBM Plex Mono',monospace;font-size:8px;letter-spacing:1.5px;
-  border:1px solid var(--line);color:var(--txt3);background:transparent;transition:all .15s;
-}
+.fchip{padding:5px 12px;border-radius:20px;cursor:pointer;font-family:'IBM Plex Mono',monospace;font-size:8px;letter-spacing:1.5px;border:1px solid var(--line);color:var(--txt3);background:transparent;transition:all .15s}
 .fchip:hover:not(.on){border-color:var(--line2);color:var(--txt2)}
 .fchip.on{background:var(--cyan-bg);border-color:rgba(0,200,212,.25);color:var(--cyan)}
-
-/* ── INPUTS ── */
-input,select,textarea{
-  background:var(--bg2);border:1px solid var(--line2);
-  padding:9px 12px;border-radius:var(--r2);
-  color:var(--txt);font-family:'IBM Plex Sans',sans-serif;font-size:13px;
-  outline:none;transition:border-color .15s,box-shadow .15s;width:100%;
-}
+input,select,textarea{background:var(--bg2);border:1px solid var(--line2);padding:9px 12px;border-radius:var(--r2);color:var(--txt);font-family:'IBM Plex Sans',sans-serif;font-size:13px;outline:none;transition:border-color .15s,box-shadow .15s;width:100%}
 textarea{resize:vertical;min-height:76px}
 input::placeholder,textarea::placeholder{color:var(--txt4)}
-input:focus,select:focus,textarea:focus{
-  border-color:rgba(232,160,32,.5);
-  box-shadow:0 0 0 3px rgba(232,160,32,.08);
-}
+input:focus,select:focus,textarea:focus{border-color:rgba(232,160,32,.5);box-shadow:0 0 0 3px rgba(232,160,32,.08)}
 select option{background:var(--bg2)}
-.flabel{
-  font-family:'IBM Plex Mono',monospace;font-size:9px;
-  letter-spacing:1.5px;color:var(--txt3);display:block;margin-bottom:5px;
-}
+.flabel{font-family:'IBM Plex Mono',monospace;font-size:9px;letter-spacing:1.5px;color:var(--txt3);display:block;margin-bottom:5px}
 .fgroup{display:flex;flex-direction:column}
 .fgrid{display:grid;grid-template-columns:1.3fr 1fr 1fr 110px 80px 90px auto;gap:10px;align-items:end}
 .fgrid2{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-top:14px}
-
-/* ── TABLE ── */
 .tw{overflow-x:auto;border-radius:var(--r2);border:1px solid var(--line)}
 table{width:100%;border-collapse:collapse}
 thead{background:var(--bg2)}
-th{
-  font-family:'IBM Plex Mono',monospace;font-size:8px;letter-spacing:2px;color:var(--txt3);
-  padding:10px 14px;border-bottom:1px solid var(--line);
-  text-align:left;white-space:nowrap;cursor:pointer;user-select:none;
-}
+th{font-family:'IBM Plex Mono',monospace;font-size:8px;letter-spacing:2px;color:var(--txt3);padding:10px 14px;border-bottom:1px solid var(--line);text-align:left;white-space:nowrap;cursor:pointer;user-select:none}
 th:hover{color:var(--txt2)}
 th .si::after{content:' ⇅';opacity:.2;font-size:9px}
 th.asc .si::after{content:' ▲';opacity:1;color:var(--cyan)}
@@ -369,120 +287,60 @@ td{padding:11px 14px;border-bottom:1px solid var(--line);vertical-align:middle;f
 tr:last-child td{border-bottom:none}
 tbody tr{transition:background .1s}
 tbody tr:hover td{background:rgba(255,255,255,.015)}
-
-/* client name cell */
 .cname b{font-weight:500;color:var(--txt)}
 .cname small{font-size:11px;color:var(--txt3);display:block;margin-top:2px;font-weight:300}
-
-/* empresa tag */
-.etag{
-  display:inline-flex;align-items:center;gap:5px;
-  background:var(--bg3);color:var(--txt2);
-  border:1px solid var(--line2);border-radius:var(--r3);
-  padding:3px 9px;font-size:11px;
-  max-width:130px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
-}
-
-/* plan badge */
-.pbadge{
-  display:inline-block;border-radius:var(--r3);padding:3px 9px;
-  font-family:'IBM Plex Mono',monospace;font-size:8px;letter-spacing:1px;font-weight:500;
-}
-.pb-basic     {background:rgba(90,98,120,.15);color:var(--txt3);border:1px solid rgba(90,98,120,.2)}
-.pb-pro       {background:var(--cyan-bg);color:var(--cyan);border:1px solid rgba(0,200,212,.2)}
+.etag{display:inline-flex;align-items:center;gap:5px;background:var(--bg3);color:var(--txt2);border:1px solid var(--line2);border-radius:var(--r3);padding:3px 9px;font-size:11px;max-width:130px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.pbadge{display:inline-block;border-radius:var(--r3);padding:3px 9px;font-family:'IBM Plex Mono',monospace;font-size:8px;letter-spacing:1px;font-weight:500}
+.pb-basic{background:rgba(90,98,120,.15);color:var(--txt3);border:1px solid rgba(90,98,120,.2)}
+.pb-pro{background:var(--cyan-bg);color:var(--cyan);border:1px solid rgba(0,200,212,.2)}
 .pb-enterprise{background:rgba(139,124,248,.08);color:#8b7cf8;border:1px solid rgba(139,124,248,.2)}
-
-/* key chip */
-.kchip{
-  display:inline-flex;align-items:center;gap:6px;cursor:pointer;
-  background:var(--bg3);color:var(--gold);
-  border:1px solid rgba(232,160,32,.2);border-radius:var(--r3);
-  padding:4px 10px;font-family:'IBM Plex Mono',monospace;font-size:10px;
-  transition:all .15s;
-}
+.kchip{display:inline-flex;align-items:center;gap:6px;cursor:pointer;background:var(--bg3);color:var(--gold);border:1px solid rgba(232,160,32,.2);border-radius:var(--r3);padding:4px 10px;font-family:'IBM Plex Mono',monospace;font-size:10px;transition:all .15s}
 .kchip:hover{background:var(--gold-bg);border-color:rgba(232,160,32,.35)}
 .kchip:active{transform:scale(.97)}
-
-/* expiry */
+/* HWID badge */
+.hbadge{display:inline-flex;align-items:center;gap:5px;border-radius:var(--r3);padding:3px 9px;font-family:'IBM Plex Mono',monospace;font-size:9px;cursor:default}
+.hbadge.vinc{background:rgba(139,124,248,.1);color:#8b7cf8;border:1px solid rgba(139,124,248,.2)}
+.hbadge.livre{background:var(--bg3);color:var(--txt4);border:1px solid var(--line)}
 .ex{font-size:12px;font-family:'IBM Plex Mono',monospace}
-.ex.exp {color:var(--red)}
-.ex.warn{color:var(--gold)}
-.ex.ok  {color:var(--txt3)}
-.ex.none{color:var(--txt4)}
-
-/* status toggle */
-.stoggle{
-  display:inline-flex;align-items:center;gap:7px;
-  padding:4px 12px;border-radius:20px;cursor:pointer;
-  font-family:'IBM Plex Mono',monospace;font-size:9px;letter-spacing:1px;
-  border:1px solid transparent;transition:all .15s;
-}
-.stoggle.on {background:var(--green-bg);color:var(--green);border-color:rgba(0,200,122,.2)}
+.ex.exp{color:var(--red)}.ex.warn{color:var(--gold)}.ex.ok{color:var(--txt3)}.ex.none{color:var(--txt4)}
+.stoggle{display:inline-flex;align-items:center;gap:7px;padding:4px 12px;border-radius:20px;cursor:pointer;font-family:'IBM Plex Mono',monospace;font-size:9px;letter-spacing:1px;border:1px solid transparent;transition:all .15s}
+.stoggle.on{background:var(--green-bg);color:var(--green);border-color:rgba(0,200,122,.2)}
 .stoggle.off{background:var(--red-bg);color:var(--red);border-color:rgba(224,48,64,.2)}
-.stoggle.on:hover {background:rgba(0,200,122,.14);transform:scale(1.03)}
+.stoggle.on:hover{background:rgba(0,200,122,.14);transform:scale(1.03)}
 .stoggle.off:hover{background:rgba(224,48,64,.14);transform:scale(1.03)}
 .sdot{width:5px;height:5px;border-radius:50%;flex-shrink:0}
-.sdot.on {background:var(--green);box-shadow:0 0 6px var(--green-glow);animation:blink 2.5s infinite}
+.sdot.on{background:var(--green);box-shadow:0 0 6px var(--green-glow);animation:blink 2.5s infinite}
 .sdot.off{background:var(--red)}
-
-/* last access */
 .lacc{font-size:11px;color:var(--txt3);font-weight:300}
 .lacc.fresh{color:var(--green)}
-
-/* row actions */
 .row-acts{display:flex;gap:3px;justify-content:flex-end}
-.ibtn{
-  background:none;border:none;color:var(--txt4);cursor:pointer;
-  padding:5px 7px;border-radius:var(--r3);transition:all .15s;
-}
+.ibtn{background:none;border:none;color:var(--txt4);cursor:pointer;padding:5px 7px;border-radius:var(--r3);transition:all .15s}
 .ibtn.edit:hover{color:var(--cyan);background:var(--cyan-bg)}
-.ibtn.del:hover {color:var(--red);background:var(--red-bg)}
-
+.ibtn.del:hover{color:var(--red);background:var(--red-bg)}
+.ibtn.hwid:hover{color:#8b7cf8;background:rgba(139,124,248,.1)}
 .empty{text-align:center;padding:52px;color:var(--txt3);font-size:13px}
 .ei{font-size:24px;opacity:.15;display:block;margin-bottom:10px;font-family:'IBM Plex Mono',monospace}
-
-/* ── MODAL ── */
-.overlay{
-  position:fixed;inset:0;background:rgba(4,6,10,.85);z-index:300;
-  display:flex;align-items:center;justify-content:center;
-  opacity:0;pointer-events:none;transition:opacity .2s;backdrop-filter:blur(12px);
-}
+.overlay{position:fixed;inset:0;background:rgba(4,6,10,.85);z-index:300;display:flex;align-items:center;justify-content:center;opacity:0;pointer-events:none;transition:opacity .2s;backdrop-filter:blur(12px)}
 .overlay.open{opacity:1;pointer-events:all}
-.modal{
-  background:var(--bg2);border:1px solid var(--line2);
-  border-radius:var(--r);padding:28px;width:100%;max-width:520px;max-height:90vh;overflow-y:auto;
-  transform:translateY(16px) scale(.98);transition:transform .25s cubic-bezier(.34,1.4,.64,1);
-  box-shadow:0 40px 100px rgba(0,0,0,.7), 0 0 0 1px rgba(232,160,32,.06);
-}
+.modal{background:var(--bg2);border:1px solid var(--line2);border-radius:var(--r);padding:28px;width:100%;max-width:520px;max-height:90vh;overflow-y:auto;transform:translateY(16px) scale(.98);transition:transform .25s cubic-bezier(.34,1.4,.64,1);box-shadow:0 40px 100px rgba(0,0,0,.7),0 0 0 1px rgba(232,160,32,.06)}
 .overlay.open .modal{transform:none}
 .modal-hd{display:flex;align-items:center;justify-content:space-between;margin-bottom:22px}
-.modal-title{
-  display:flex;align-items:center;gap:10px;
-  font-family:'IBM Plex Mono',monospace;font-size:10px;letter-spacing:2.5px;color:var(--txt2);
-}
-.modal-icon{
-  width:28px;height:28px;
-  background:var(--gold-bg);border:1px solid rgba(232,160,32,.2);
-  border-radius:var(--r3);display:flex;align-items:center;justify-content:center;
-}
-.mclose{
-  background:none;border:none;color:var(--txt3);cursor:pointer;
-  padding:4px 8px;border-radius:var(--r3);font-size:16px;transition:all .15s;
-}
+.modal-title{display:flex;align-items:center;gap:10px;font-family:'IBM Plex Mono',monospace;font-size:10px;letter-spacing:2.5px;color:var(--txt2)}
+.modal-icon{width:28px;height:28px;background:var(--gold-bg);border:1px solid rgba(232,160,32,.2);border-radius:var(--r3);display:flex;align-items:center;justify-content:center}
+.mclose{background:none;border:none;color:var(--txt3);cursor:pointer;padding:4px 8px;border-radius:var(--r3);font-size:16px;transition:all .15s}
 .mclose:hover{color:var(--red);background:var(--red-bg)}
 .mgrid{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:12px}
 .mgrid.full{grid-template-columns:1fr}
 .ropts{display:flex;gap:6px;flex-wrap:wrap;margin-top:6px}
-.ropt{
-  padding:5px 13px;border-radius:var(--r3);cursor:pointer;
-  font-family:'IBM Plex Mono',monospace;font-size:9px;letter-spacing:1px;
-  border:1px solid var(--line2);color:var(--txt3);background:transparent;transition:all .15s;
-}
+.ropt{padding:5px 13px;border-radius:var(--r3);cursor:pointer;font-family:'IBM Plex Mono',monospace;font-size:9px;letter-spacing:1px;border:1px solid var(--line2);color:var(--txt3);background:transparent;transition:all .15s}
 .ropt:hover:not(.on){border-color:var(--line2);color:var(--txt2)}
 .ropt.on{background:var(--green-bg);border-color:rgba(0,200,122,.3);color:var(--green)}
 .modal-footer{display:flex;gap:8px;justify-content:flex-end;margin-top:22px;padding-top:18px;border-top:1px solid var(--line)}
-
-/* ── STATS ── */
+/* HWID info box no modal */
+.hwid-box{background:var(--bg3);border:1px solid var(--line);border-radius:var(--r2);padding:12px 14px;margin-bottom:12px}
+.hwid-box-label{font-family:'IBM Plex Mono',monospace;font-size:8px;letter-spacing:2px;color:var(--txt3);margin-bottom:6px}
+.hwid-box-val{font-family:'IBM Plex Mono',monospace;font-size:10px;color:#8b7cf8;word-break:break-all}
+.hwid-box-val.none{color:var(--txt4)}
 .sgrid{display:grid;grid-template-columns:repeat(3,1fr);gap:14px}
 .scard{background:var(--bg2);border:1px solid var(--line);border-radius:var(--r);padding:18px}
 .scard-title{font-family:'IBM Plex Mono',monospace;font-size:8px;letter-spacing:2.5px;color:var(--txt3);margin-bottom:14px}
@@ -496,66 +354,30 @@ tbody tr:hover td{background:rgba(255,255,255,.015)}
 .dleg-row{display:flex;align-items:center;gap:8px;margin-bottom:8px;font-size:12px;color:var(--txt2);font-weight:300}
 .dleg-dot{width:7px;height:7px;border-radius:50%;flex-shrink:0}
 .dleg-val{margin-left:auto;font-family:'IBM Plex Mono',monospace;font-size:11px;color:var(--txt3)}
-
-/* ── LOGS ── */
-.logbox{
-  background:var(--bg2);border:1px solid var(--line);border-radius:var(--r2);
-  padding:14px;max-height:280px;overflow-y:auto;
-  font-family:'IBM Plex Mono',monospace;font-size:10px;line-height:2;
-}
+.logbox{background:var(--bg2);border:1px solid var(--line);border-radius:var(--r2);padding:14px;max-height:280px;overflow-y:auto;font-family:'IBM Plex Mono',monospace;font-size:10px;line-height:2}
 .lrow{display:flex;gap:10px;align-items:baseline;flex-wrap:wrap}
 .lts{color:var(--txt4);font-size:9px;flex-shrink:0;min-width:80px}
-.lok  {color:var(--green)}
-.lfail{color:var(--red)}
-.linf {color:var(--gold)}
-.lsys {color:var(--cyan)}
-.lip  {font-size:9px;color:var(--txt4);margin-left:auto}
-.lsep{border:none;border-top:1px solid var(--line);margin:4px 0}
-
-/* ── KEY PREVIEW ── */
-.kprev{
-  background:var(--bg2);border:1px solid var(--line);border-radius:var(--r2);
-  padding:18px;display:flex;flex-direction:column;justify-content:center;
-}
+.lok{color:var(--green)}.lfail{color:var(--red)}.linf{color:var(--gold)}.lsys{color:var(--cyan)}
+.lip{font-size:9px;color:var(--txt4);margin-left:auto}
+.kprev{background:var(--bg2);border:1px solid var(--line);border-radius:var(--r2);padding:18px;display:flex;flex-direction:column;justify-content:center}
 .kprev-label{font-family:'IBM Plex Mono',monospace;font-size:8px;letter-spacing:2px;color:var(--txt3);margin-bottom:10px}
 .kprev-val{font-family:'IBM Plex Mono',monospace;font-size:13px;color:var(--txt4);word-break:break-all}
 .kprev-val.ready{color:var(--gold);text-shadow:0 0 20px var(--gold-glow)}
 .kprev-info{font-size:11px;color:var(--txt3);margin-top:10px;font-weight:300;line-height:1.6}
-
-/* ── DIVIDER ── */
 .divider{height:1px;background:var(--line);margin:18px 0}
-
-/* ── TOAST ── */
-.toast{
-  position:fixed;bottom:22px;right:22px;z-index:999;
-  background:var(--bg3);border:1px solid var(--line2);
-  padding:11px 18px;border-radius:var(--r2);
-  font-family:'IBM Plex Mono',monospace;font-size:10px;letter-spacing:.5px;color:var(--txt);
-  display:flex;align-items:center;gap:10px;
-  box-shadow:0 16px 48px rgba(0,0,0,.6);
-  opacity:0;transform:translateY(10px) scale(.97);
-  transition:all .2s cubic-bezier(.34,1.3,.64,1);pointer-events:none;max-width:300px;
-}
+.toast{position:fixed;bottom:22px;right:22px;z-index:999;background:var(--bg3);border:1px solid var(--line2);padding:11px 18px;border-radius:var(--r2);font-family:'IBM Plex Mono',monospace;font-size:10px;letter-spacing:.5px;color:var(--txt);display:flex;align-items:center;gap:10px;box-shadow:0 16px 48px rgba(0,0,0,.6);opacity:0;transform:translateY(10px) scale(.97);transition:all .2s cubic-bezier(.34,1.3,.64,1);pointer-events:none;max-width:300px}
 .toast.show{opacity:1;transform:none}
 .tdot{width:6px;height:6px;border-radius:50%;flex-shrink:0}
-.tok  {background:var(--green)}
-.terr {background:var(--red)}
-.twarn{background:var(--gold)}
-.tinf {background:var(--cyan)}
-
-/* ── ANIMATIONS ── */
+.tok{background:var(--green)}.terr{background:var(--red)}.twarn{background:var(--gold)}.tinf{background:var(--cyan)}
 @keyframes fadeUp{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:none}}
 @keyframes blink{0%,100%{opacity:1}50%{opacity:.4}}
-
-/* ── RESPONSIVE ── */
 @media(max-width:1200px){.kpis{grid-template-columns:repeat(3,1fr)}}
-@media(max-width:900px) {.kpis{grid-template-columns:repeat(2,1fr)}.fgrid{grid-template-columns:1fr 1fr}.sgrid{grid-template-columns:1fr}}
-@media(max-width:600px) {.kpis{grid-template-columns:1fr 1fr}.mgrid{grid-template-columns:1fr}}
+@media(max-width:900px){.kpis{grid-template-columns:repeat(2,1fr)}.fgrid{grid-template-columns:1fr 1fr}.sgrid{grid-template-columns:1fr}}
+@media(max-width:600px){.kpis{grid-template-columns:1fr 1fr}.mgrid{grid-template-columns:1fr}}
 </style>
 </head>
 <body data-modo="app">
 <div class="page">
-
   <!-- TOPBAR -->
   <div class="topbar">
     <div class="brand">
@@ -566,7 +388,7 @@ tbody tr:hover td{background:rgba(255,255,255,.015)}
       </div>
       <div class="brand-text">
         <div class="brand-name">LUCS TECH</div>
-        <div class="brand-sub">ACCESS CONTROL v2</div>
+        <div class="brand-sub">ACCESS CONTROL v3 · HWID</div>
       </div>
     </div>
     <div class="topbar-right">
@@ -584,46 +406,40 @@ tbody tr:hover td{background:rgba(255,255,255,.015)}
   <!-- KPIs -->
   <div class="kpis">
     <div class="kpi" style="animation-delay:.05s">
-      <div class="kpi-stripe"></div>
-      <div class="kpi-icon">⬡</div>
+      <div class="kpi-stripe"></div><div class="kpi-icon">⬡</div>
       <div class="kpi-label">TOTAL</div>
       <div class="kpi-val" id="k-total">—</div>
       <div class="kpi-sub">clientes cadastrados</div>
     </div>
     <div class="kpi" style="animation-delay:.08s">
-      <div class="kpi-stripe"></div>
-      <div class="kpi-icon">◉</div>
+      <div class="kpi-stripe"></div><div class="kpi-icon">◉</div>
       <div class="kpi-label">ATIVOS</div>
       <div class="kpi-val" id="k-ativos">—</div>
       <div class="kpi-sub" id="k-ativos-pct">—</div>
     </div>
     <div class="kpi" style="animation-delay:.11s">
-      <div class="kpi-stripe"></div>
-      <div class="kpi-icon">⊘</div>
+      <div class="kpi-stripe"></div><div class="kpi-icon">⊘</div>
       <div class="kpi-label">BLOQUEADOS</div>
       <div class="kpi-val" id="k-bloq">—</div>
       <div class="kpi-sub" id="k-bloq-pct">—</div>
     </div>
     <div class="kpi" style="animation-delay:.14s">
-      <div class="kpi-stripe"></div>
-      <div class="kpi-icon">◌</div>
+      <div class="kpi-stripe"></div><div class="kpi-icon">◌</div>
       <div class="kpi-label">VENCIDOS</div>
       <div class="kpi-val" id="k-venc">—</div>
       <div class="kpi-sub">licenças expiradas</div>
     </div>
     <div class="kpi" style="animation-delay:.17s">
-      <div class="kpi-stripe"></div>
-      <div class="kpi-icon">◈</div>
+      <div class="kpi-stripe"></div><div class="kpi-icon">◈</div>
       <div class="kpi-label">LOGINS HOJE</div>
       <div class="kpi-val" id="k-hoje">—</div>
       <div class="kpi-sub">autenticações válidas</div>
     </div>
     <div class="kpi" style="animation-delay:.20s">
-      <div class="kpi-stripe"></div>
-      <div class="kpi-icon">◫</div>
-      <div class="kpi-label">NEGADOS HOJE</div>
-      <div class="kpi-val" id="k-neg">—</div>
-      <div class="kpi-sub">acessos bloqueados</div>
+      <div class="kpi-stripe"></div><div class="kpi-icon">⊟</div>
+      <div class="kpi-label">HWID VINC.</div>
+      <div class="kpi-val" id="k-hwid">—</div>
+      <div class="kpi-sub">máquinas vinculadas</div>
     </div>
   </div>
 
@@ -657,24 +473,19 @@ tbody tr:hover td{background:rgba(255,255,255,.015)}
         </div>
         <div class="sec-right">
           <a href="/admin/exportar-csv" class="btn btn-cyan btn-sm" download>
-            <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4M7 10l5 5 5-5M12 15V3"/></svg>
-            CSV
+            <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4M7 10l5 5 5-5M12 15V3"/></svg>CSV
           </a>
           <button class="btn btn-ghost btn-sm" id="btn-rel">
-            <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14,2 14,8 20,8"/></svg>
-            TXT
+            <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14,2 14,8 20,8"/></svg>TXT
           </button>
           <button class="btn btn-green btn-sm" id="btn-renovar-venc">
-            <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>
-            RENOVAR VENCIDOS
+            <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>RENOVAR VENCIDOS
           </button>
           <button class="btn btn-red btn-sm" id="btn-bloqtodos">
-            <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0110 0v4"/></svg>
-            BLOQUEAR TODOS
+            <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0110 0v4"/></svg>BLOQUEAR TODOS
           </button>
         </div>
       </div>
-
       <div class="toolbar">
         <div class="search-wrap">
           <svg class="ico" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
@@ -686,9 +497,10 @@ tbody tr:hover td{background:rgba(255,255,255,.015)}
           <button class="fchip" data-f="bloqueado">BLOQUEADOS</button>
           <button class="fchip" data-f="vencido">VENCIDOS</button>
           <button class="fchip" data-f="vence7">VENCE EM 7D</button>
+          <button class="fchip" data-f="hwid">COM HWID</button>
+          <button class="fchip" data-f="sem_hwid">SEM HWID</button>
         </div>
       </div>
-
       <div class="tw">
         <table>
           <thead><tr>
@@ -696,13 +508,14 @@ tbody tr:hover td{background:rgba(255,255,255,.015)}
             <th data-col="empresa">EMPRESA <span class="si"></span></th>
             <th>PLANO</th>
             <th data-col="chave">CHAVE <span class="si"></span></th>
+            <th>HWID</th>
             <th data-col="expira">VENCIMENTO <span class="si"></span></th>
             <th data-col="ultimo_acesso">ÚLTIMO ACESSO <span class="si"></span></th>
             <th>STATUS</th>
             <th></th>
           </tr></thead>
           <tbody id="tbody">
-            <tr><td colspan="8" class="empty"><span class="ei">⟳</span>Carregando dados...</td></tr>
+            <tr><td colspan="9" class="empty"><span class="ei">⟳</span>Carregando dados...</td></tr>
           </tbody>
         </table>
       </div>
@@ -712,7 +525,7 @@ tbody tr:hover td{background:rgba(255,255,255,.015)}
     <div class="tab-body" id="tab-nova">
       <div class="sec-hd"><div class="sec-title">CRIAR NOVA LICENÇA</div></div>
       <div class="fgrid">
-        <div class="fgroup"><label class="flabel">NOME *</label><input id="i-nome" type="text" placeholder="Nome completo do cliente"/></div>
+        <div class="fgroup"><label class="flabel">NOME *</label><input id="i-nome" type="text" placeholder="Nome completo"/></div>
         <div class="fgroup"><label class="flabel">EMPRESA</label><input id="i-empresa" type="text" placeholder="Empresa (opcional)"/></div>
         <div class="fgroup"><label class="flabel">E-MAIL</label><input id="i-email" type="email" placeholder="email@dominio.com"/></div>
         <div class="fgroup"><label class="flabel">PLANO</label>
@@ -723,12 +536,11 @@ tbody tr:hover td{background:rgba(255,255,255,.015)}
           <select id="i-ilimitado"><option value="0">NÃO</option><option value="1">SIM</option></select>
         </div>
         <button class="btn btn-gold" id="btn-criar" style="align-self:end">
-          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M12 5v14M5 12h14"/></svg>
-          GERAR
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M12 5v14M5 12h14"/></svg>GERAR
         </button>
       </div>
       <div class="fgrid2">
-        <div class="fgroup"><label class="flabel">OBSERVAÇÕES</label><textarea id="i-obs" placeholder="Notas internas sobre este cliente..."></textarea></div>
+        <div class="fgroup"><label class="flabel">OBSERVAÇÕES</label><textarea id="i-obs" placeholder="Notas internas..."></textarea></div>
         <div class="kprev">
           <div class="kprev-label">CHAVE GERADA</div>
           <div class="kprev-val" id="preview-chave">— aguardando —</div>
@@ -737,7 +549,7 @@ tbody tr:hover td{background:rgba(255,255,255,.015)}
       </div>
     </div>
 
-    <!-- TAB: ESTATÍSTICAS -->
+    <!-- TAB: STATS -->
     <div class="tab-body" id="tab-stats">
       <div class="sgrid">
         <div class="scard"><div class="scard-title">TOP EMPRESAS</div><div id="st-empresas"></div></div>
@@ -762,12 +574,10 @@ tbody tr:hover td{background:rgba(255,255,255,.015)}
         <div class="sec-title">ATIVIDADE RECENTE</div>
         <div style="display:flex;gap:6px">
           <button class="btn btn-ghost btn-sm" id="btn-exp-logs">
-            <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4M7 10l5 5 5-5M12 15V3"/></svg>
-            EXPORTAR
+            <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4M7 10l5 5 5-5M12 15V3"/></svg>EXPORTAR
           </button>
           <button class="btn btn-red btn-sm" id="btn-limpar">
-            <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 01-2 2H8a2 2 0 01-2-2L5 6"/></svg>
-            LIMPAR LOGS
+            <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 01-2 2H8a2 2 0 01-2-2L5 6"/></svg>LIMPAR LOGS
           </button>
         </div>
       </div>
@@ -791,15 +601,25 @@ tbody tr:hover td{background:rgba(255,255,255,.015)}
       </div>
       <button class="mclose" id="modal-close">✕</button>
     </div>
+    <!-- HWID info box -->
+    <div class="hwid-box" id="m-hwid-box">
+      <div class="hwid-box-label">HWID VINCULADO</div>
+      <div class="hwid-box-val none" id="m-hwid-val">Nenhum — licença livre para qualquer máquina</div>
+      <div style="margin-top:10px;display:flex;gap:6px;align-items:center">
+        <button class="btn btn-red btn-sm" id="m-btn-reset-hwid" style="display:none">
+          <svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>
+          RESETAR HWID
+        </button>
+        <span style="font-size:10px;color:var(--txt4)" id="m-hwid-hint">Vinculado automaticamente no 1º login</span>
+      </div>
+    </div>
     <div class="mgrid">
       <div class="fgroup"><label class="flabel">NOME</label><input id="m-nome" type="text"/></div>
       <div class="fgroup"><label class="flabel">E-MAIL</label><input id="m-email" type="email"/></div>
       <div class="fgroup"><label class="flabel">EMPRESA</label><input id="m-empresa" type="text"/></div>
       <div class="fgroup"><label class="flabel">PLANO</label>
         <select id="m-plano">
-          <option value="basic">BASIC</option>
-          <option value="pro">PRO</option>
-          <option value="enterprise">ENTERPRISE</option>
+          <option value="basic">BASIC</option><option value="pro">PRO</option><option value="enterprise">ENTERPRISE</option>
         </select>
       </div>
     </div>
@@ -824,48 +644,38 @@ tbody tr:hover td{background:rgba(255,255,255,.015)}
         <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
           <path d="M19 21H5a2 2 0 01-2-2V5a2 2 0 012-2h11l5 5v14a2 2 0 01-2 2z"/>
           <polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/>
-        </svg>
-        SALVAR
+        </svg>SALVAR
       </button>
     </div>
   </div>
 </div>
 
 <!-- TOAST -->
-<div class="toast" id="toast">
-  <div class="tdot tok" id="tdot"></div>
-  <span id="tmsg"></span>
-</div>
+<div class="toast" id="toast"><div class="tdot tok" id="tdot"></div><span id="tmsg"></span></div>
 
 <script>
-/* ── INIT ── */
-const MODO = document.body.dataset.modo || 'app';
-const navEl = document.getElementById('nav-' + MODO);
-if (navEl) navEl.classList.add('on');
+const MODO=document.body.dataset.modo||'app';
+const navEl=document.getElementById('nav-'+MODO);
+if(navEl)navEl.classList.add('on');
 
-let allU=[], allLogs=[], filtro='todos', busca='', sortCol='', sortDir=1, editDias=0;
+let allU=[],allLogs=[],filtro='todos',busca='',sortCol='',sortDir=1,editDias=0;
 
-/* ── TOAST ── */
 let _tt;
-function toast(msg, tipo='ok'){
+function toast(msg,tipo='ok'){
   document.getElementById('tdot').className='tdot t'+tipo;
   document.getElementById('tmsg').textContent=msg;
   const el=document.getElementById('toast');
-  el.classList.add('show'); clearTimeout(_tt);
+  el.classList.add('show');clearTimeout(_tt);
   _tt=setTimeout(()=>el.classList.remove('show'),3000);
 }
 
-/* ── UTILS ── */
 function esc(s){return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;')}
 function fDate(s){return s?new Date(s+'T00:00:00').toLocaleDateString('pt-BR'):''}
 function fDT(s){return s?new Date(s).toLocaleString('pt-BR'):null}
 function ago(s){
   if(!s)return null;
   const h=(Date.now()-new Date(s).getTime())/3600000;
-  if(h<1)return'Agora';
-  if(h<24)return Math.floor(h)+'h atrás';
-  if(h<48)return'Ontem';
-  return fDT(s);
+  if(h<1)return'Agora';if(h<24)return Math.floor(h)+'h atrás';if(h<48)return'Ontem';return fDT(s);
 }
 function exSt(s){
   if(!s)return'none';
@@ -873,36 +683,30 @@ function exSt(s){
   return dd<0?'exp':dd<=7?'warn':'ok';
 }
 function isExp(s){return s&&new Date(s+'T00:00:00')<new Date(new Date().toDateString())}
-function vence7(s){
-  if(!s)return false;
-  const dd=(new Date(s+'T00:00:00')-new Date(new Date().toDateString()))/86400000;
-  return dd>=0&&dd<=7;
-}
+function vence7(s){if(!s)return false;const dd=(new Date(s+'T00:00:00')-new Date(new Date().toDateString()))/86400000;return dd>=0&&dd<=7}
 function planoCls(p){return p==='pro'?'pb-pro':p==='enterprise'?'pb-enterprise':'pb-basic'}
 
-/* ── TABS ── */
 document.querySelectorAll('.ptab').forEach(b=>{
   b.onclick=()=>{
     document.querySelectorAll('.ptab').forEach(x=>x.classList.remove('on'));
     document.querySelectorAll('.tab-body').forEach(x=>x.classList.remove('on'));
-    b.classList.add('on');
-    document.getElementById('tab-'+b.dataset.tab).classList.add('on');
+    b.classList.add('on');document.getElementById('tab-'+b.dataset.tab).classList.add('on');
     if(b.dataset.tab==='stats')renderStats();
   }
 });
 
-/* ── LOAD DATA ── */
 async function load(){
   try{
     const r=await fetch('/admin/dados');
     if(!r.ok)throw new Error('HTTP '+r.status);
     const d=await r.json();
     if(!d.usuarios)throw new Error('sem dados');
-    allU=d.usuarios; allLogs=d.logs||[];
+    allU=d.usuarios;allLogs=d.logs||[];
     const total=allU.length;
     const ativos=allU.filter(u=>u.ativo&&!isExp(u.expira)).length;
     const bloq=allU.filter(u=>!u.ativo).length;
     const venc=allU.filter(u=>isExp(u.expira)).length;
+    const hwids=allU.filter(u=>u.hwid).length;
     document.getElementById('k-total').textContent=total;
     document.getElementById('k-ativos').textContent=ativos;
     document.getElementById('k-ativos-pct').textContent=total?Math.round(ativos/total*100)+'% do total':'—';
@@ -910,29 +714,30 @@ async function load(){
     document.getElementById('k-bloq-pct').textContent=total?Math.round(bloq/total*100)+'% do total':'—';
     document.getElementById('k-venc').textContent=venc;
     document.getElementById('k-hoje').textContent=d.logs_hoje||0;
-    document.getElementById('k-neg').textContent=d.negados_hoje||0;
+    document.getElementById('k-hwid').textContent=hwids;
     document.getElementById('hdot').className='sys-dot ok';
     document.getElementById('hstatus').textContent='ONLINE';
-    renderT(); renderLogs();
+    renderT();renderLogs();
   }catch(e){
     document.getElementById('hdot').className='sys-dot err';
     document.getElementById('hstatus').textContent='ERRO BD';
-    console.error('Load error:',e);
+    console.error(e);
   }
 }
 
-/* ── RENDER TABLE ── */
 function renderT(){
   let list=[...allU];
-  if(filtro==='ativo')    list=list.filter(u=>u.ativo&&!isExp(u.expira));
-  else if(filtro==='bloqueado')list=list.filter(u=>!u.ativo);
-  else if(filtro==='vencido')  list=list.filter(u=>isExp(u.expira));
-  else if(filtro==='vence7')   list=list.filter(u=>vence7(u.expira));
+  if(filtro==='ativo')       list=list.filter(u=>u.ativo&&!isExp(u.expira));
+  else if(filtro==='bloqueado') list=list.filter(u=>!u.ativo);
+  else if(filtro==='vencido')   list=list.filter(u=>isExp(u.expira));
+  else if(filtro==='vence7')    list=list.filter(u=>vence7(u.expira));
+  else if(filtro==='hwid')      list=list.filter(u=>u.hwid);
+  else if(filtro==='sem_hwid')  list=list.filter(u=>!u.hwid);
   if(busca){const q=busca.toLowerCase();list=list.filter(u=>['nome','empresa','email','chave','plano'].some(k=>(u[k]||'').toLowerCase().includes(q)))}
   if(sortCol)list.sort((a,b)=>String(a[sortCol]||'').localeCompare(String(b[sortCol]||''))*sortDir);
   document.getElementById('badge-n').textContent=list.length;
   const tb=document.getElementById('tbody');
-  if(!list.length){tb.innerHTML='<tr><td colspan="8" class="empty"><span class="ei">⌀</span>Nenhum resultado.</td></tr>';return}
+  if(!list.length){tb.innerHTML='<tr><td colspan="9" class="empty"><span class="ei">⌀</span>Nenhum resultado.</td></tr>';return}
   const exLbl={exp:'Vencida',warn:'Vence em breve',ok:'',none:'Sem limite'};
   tb.innerHTML=list.map(u=>{
     const es=exSt(u.expira);
@@ -941,6 +746,12 @@ function renderT(){
     const fresh=u.ultimo_acesso&&(Date.now()-new Date(u.ultimo_acesso).getTime())<3600000;
     const plano=u.plano||'basic';
     const ud=JSON.stringify(u).replace(/"/g,'&quot;');
+    const hwidHtml=u.hwid
+      ?`<span class="hbadge vinc" title="${esc(u.hwid)}">
+           <svg width="8" height="8" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8M12 17v4"/></svg>
+           ${esc(u.hwid.slice(0,10))}…
+         </span>`
+      :`<span class="hbadge livre">LIVRE</span>`;
     return`<tr>
       <td class="cname"><b>${esc(u.nome)}</b><small>${esc(u.email||'')}</small></td>
       <td>${u.empresa?`<span class="etag">${esc(u.empresa)}</span>`:'<span style="color:var(--txt4)">—</span>'}</td>
@@ -948,12 +759,16 @@ function renderT(){
       <td><span class="kchip" data-k="${esc(u.chave)}">
         <svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="11" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/></svg>
         ${esc(u.chave)}</span></td>
+      <td>${hwidHtml}</td>
       <td><span class="ex ${es}">${exTxt||'—'}</span></td>
       <td><span class="lacc${fresh?' fresh':''}">${a||'<span style="color:var(--txt4)">Nunca</span>'}</span></td>
       <td><button class="stoggle ${u.ativo?'on':'off'}" data-k="${esc(u.chave)}">
         <span class="sdot ${u.ativo?'on':'off'}"></span>${u.ativo?'ATIVO':'BLOQUEADO'}
       </button></td>
       <td><div class="row-acts">
+        ${u.hwid?`<button class="ibtn hwid" data-k="${esc(u.chave)}" title="Resetar HWID">
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>
+        </button>`:''}
         <button class="ibtn edit" data-ud="${ud}" title="Editar">
           <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 013 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
         </button>
@@ -966,19 +781,18 @@ function renderT(){
   tb.querySelectorAll('.kchip').forEach(e=>e.onclick=()=>{navigator.clipboard.writeText(e.dataset.k);toast('Chave copiada!')});
   tb.querySelectorAll('.stoggle').forEach(e=>e.onclick=()=>tog(e.dataset.k));
   tb.querySelectorAll('.ibtn.del').forEach(e=>e.onclick=()=>rem(e.dataset.k));
+  tb.querySelectorAll('.ibtn.hwid').forEach(e=>e.onclick=()=>resetHwid(e.dataset.k));
   tb.querySelectorAll('.ibtn.edit').forEach(e=>e.onclick=()=>{
     try{openEdit(JSON.parse(e.dataset.ud.replace(/&quot;/g,'"')))}catch{}
   });
 }
 
-/* ── SORT & FILTER ── */
 document.querySelectorAll('th[data-col]').forEach(th=>{
   th.onclick=()=>{
     const col=th.dataset.col;
     if(sortCol===col)sortDir*=-1;else{sortCol=col;sortDir=1}
     document.querySelectorAll('th[data-col]').forEach(t=>t.classList.remove('asc','desc'));
-    th.classList.add(sortDir===1?'asc':'desc');
-    renderT();
+    th.classList.add(sortDir===1?'asc':'desc');renderT();
   }
 });
 document.querySelectorAll('.fchip').forEach(b=>{
@@ -986,16 +800,15 @@ document.querySelectorAll('.fchip').forEach(b=>{
 });
 document.getElementById('inp-q').oninput=e=>{busca=e.target.value.trim();renderT()};
 
-/* ── CRIAR ── */
+/* CRIAR */
 document.getElementById('btn-criar').onclick=async()=>{
   const nome=document.getElementById('i-nome').value.trim();
-  if(!nome){toast('Informe o nome do cliente','warn');return}
+  if(!nome){toast('Informe o nome','warn');return}
   const btn=document.getElementById('btn-criar');
   btn.disabled=true;btn.textContent='...';
   try{
     const r=await fetch('/admin/criar',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({
-      nome,
-      empresa:document.getElementById('i-empresa').value.trim(),
+      nome,empresa:document.getElementById('i-empresa').value.trim(),
       email:document.getElementById('i-email').value.trim(),
       plano:document.getElementById('i-plano').value,
       dias:document.getElementById('i-dias').value,
@@ -1006,32 +819,25 @@ document.getElementById('btn-criar').onclick=async()=>{
     if(d.ok){
       const prev=document.getElementById('preview-chave');
       prev.textContent=d.chave;prev.classList.add('ready');
-      document.getElementById('preview-info').innerHTML=
-        'Gerado em '+new Date().toLocaleString('pt-BR')+
-        '<br>Plano: '+document.getElementById('i-plano').value.toUpperCase()+
-        ' · '+(document.getElementById('i-ilimitado').value==='1'?'Sem limite':document.getElementById('i-dias').value+' dias');
+      document.getElementById('preview-info').innerHTML='Gerado em '+new Date().toLocaleString('pt-BR')+'<br>Plano: '+document.getElementById('i-plano').value.toUpperCase()+' · '+(document.getElementById('i-ilimitado').value==='1'?'Sem limite':document.getElementById('i-dias').value+' dias')+'<br><span style="color:#8b7cf8">HWID: será vinculado no 1º login</span>';
       toast('Licença gerada: '+d.chave);
       ['i-nome','i-empresa','i-email','i-obs'].forEach(id=>document.getElementById(id).value='');
       load();
     }else toast(d.msg||'Erro ao criar','err');
   }catch{toast('Erro de conexão','err')}
-  finally{
-    btn.disabled=false;
-    btn.innerHTML='<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M12 5v14M5 12h14"/></svg>GERAR';
-  }
+  finally{btn.disabled=false;btn.innerHTML='<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M12 5v14M5 12h14"/></svg>GERAR'}
 };
 
-/* ── TOGGLE ── */
+/* TOGGLE */
 async function tog(chave){
   try{
     const r=await fetch('/admin/toggle',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({chave})});
     const d=await r.json();
-    if(d.ok){toast(d.ativo?'Ativado!':'Bloqueado!',d.ativo?'ok':'warn');load()}
-    else toast(d.msg||'Erro','err');
+    if(d.ok){toast(d.ativo?'Ativado!':'Bloqueado!',d.ativo?'ok':'warn');load()}else toast(d.msg||'Erro','err');
   }catch{toast('Erro de conexão','err')}
 }
 
-/* ── DELETAR ── */
+/* DELETE */
 async function rem(chave){
   if(!confirm('Remover este cliente permanentemente?'))return;
   try{
@@ -1041,16 +847,26 @@ async function rem(chave){
   }catch{toast('Erro de conexão','err')}
 }
 
-/* ── BLOQUEAR TODOS ── */
+/* RESET HWID */
+async function resetHwid(chave){
+  if(!confirm('Resetar HWID desta licença?\nO próximo login vinculará uma nova máquina.'))return;
+  try{
+    const r=await fetch('/admin/reset-hwid',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({chave})});
+    const d=await r.json();
+    if(d.ok){toast('HWID resetado — licença livre','ok');load()}else toast(d.msg||'Erro','err');
+  }catch{toast('Erro de conexão','err')}
+}
+
+/* BLOQUEAR TODOS */
 document.getElementById('btn-bloqtodos').onclick=async()=>{
   const n=allU.filter(u=>u.ativo).length;
   if(!n){toast('Nenhum ativo','warn');return}
-  if(!confirm('Bloquear '+n+' cliente(s) ativo(s)?'))return;
+  if(!confirm('Bloquear '+n+' cliente(s)?'))return;
   try{await fetch('/admin/bloquear-todos',{method:'POST'});toast(n+' clientes bloqueados','warn');load()}
   catch{toast('Erro','err')}
 };
 
-/* ── RENOVAR VENCIDOS ── */
+/* RENOVAR VENCIDOS */
 document.getElementById('btn-renovar-venc').onclick=async()=>{
   const venc=allU.filter(u=>isExp(u.expira));
   if(!venc.length){toast('Nenhum vencido','warn');return}
@@ -1063,7 +879,7 @@ document.getElementById('btn-renovar-venc').onclick=async()=>{
   }catch{toast('Erro','err')}
 };
 
-/* ── MODAL EDITAR ── */
+/* MODAL EDITAR */
 let editChave='';
 function openEdit(u){
   editChave=u.chave;editDias=0;
@@ -1074,8 +890,26 @@ function openEdit(u){
   document.getElementById('m-obs').value=u.obs||'';
   document.querySelectorAll('.ropt').forEach(b=>b.classList.remove('on'));
   document.querySelector('.ropt[data-d="0"]').classList.add('on');
+  // HWID
+  const hwidVal=document.getElementById('m-hwid-val');
+  const resetBtn=document.getElementById('m-btn-reset-hwid');
+  const hint=document.getElementById('m-hwid-hint');
+  if(u.hwid){
+    hwidVal.textContent=u.hwid;hwidVal.className='hwid-box-val';
+    resetBtn.style.display='inline-flex';
+    hint.textContent='Vinculado à esta máquina';
+  }else{
+    hwidVal.textContent='Nenhum — licença livre para qualquer máquina';
+    hwidVal.className='hwid-box-val none';
+    resetBtn.style.display='none';
+    hint.textContent='Será vinculado automaticamente no 1º login com HWID';
+  }
   document.getElementById('modal-overlay').classList.add('open');
 }
+document.getElementById('m-btn-reset-hwid').onclick=async()=>{
+  if(!confirm('Resetar HWID desta licença?'))return;
+  await resetHwid(editChave);closeModal();
+};
 document.querySelectorAll('.ropt').forEach(b=>{
   b.onclick=()=>{document.querySelectorAll('.ropt').forEach(x=>x.classList.remove('on'));b.classList.add('on');editDias=parseInt(b.dataset.d)}
 });
@@ -1086,26 +920,27 @@ document.getElementById('modal-overlay').onclick=e=>{if(e.target===e.currentTarg
 document.getElementById('modal-save').onclick=async()=>{
   try{
     const r=await fetch('/admin/editar',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({
-      chave:editChave,
-      nome:document.getElementById('m-nome').value.trim(),
+      chave:editChave,nome:document.getElementById('m-nome').value.trim(),
       email:document.getElementById('m-email').value.trim(),
       empresa:document.getElementById('m-empresa').value.trim(),
       plano:document.getElementById('m-plano').value,
-      obs:document.getElementById('m-obs').value.trim(),
-      renovar_dias:editDias
+      obs:document.getElementById('m-obs').value.trim(),renovar_dias:editDias
     })});
     const d=await r.json();
-    if(d.ok){toast('Salvo com sucesso!');closeModal();load()}else toast(d.msg||'Erro','err');
+    if(d.ok){toast('Salvo!');closeModal();load()}else toast(d.msg||'Erro','err');
   }catch{toast('Erro de conexão','err')}
 };
 
-/* ── RENDER LOGS ── */
+/* LOGS */
 function renderLogs(){
   const lb=document.getElementById('logs');
-  if(!allLogs.length){lb.innerHTML='<span style="color:var(--txt4)">Sem atividade registrada.</span>';return}
+  if(!allLogs.length){lb.innerHTML='<span style="color:var(--txt4)">Sem atividade.</span>';return}
   lb.innerHTML=allLogs.map(l=>{
     let cls,icon,lbl;
     if(l.acao==='login'){cls=l.sucesso?'lok':'lfail';icon=l.sucesso?'✓':'✗';lbl=l.sucesso?'LOGIN OK':'NEGADO'}
+    else if(l.acao==='hwid_vinculado'){cls='lsys';icon='⊟';lbl='HWID VINC.'}
+    else if(l.acao==='hwid_reset'){cls='linf';icon='↺';lbl='HWID RESET'}
+    else if(l.acao==='hwid_recusado'){cls='lfail';icon='⊘';lbl='HWID NEGADO'}
     else if(l.acao==='bloqueio_geral'){cls='lsys';icon='⊘';lbl='BLOQ.GERAL'}
     else if(l.acao==='criacao'){cls='linf';icon='+';lbl='CRIAÇÃO'}
     else if(l.acao==='edicao'){cls='linf';icon='~';lbl='EDIÇÃO'}
@@ -1119,120 +954,89 @@ function renderLogs(){
   }).join('');
 }
 
-/* ── RENDER STATS ── */
+/* STATS */
 function renderStats(){
-  // Empresas
-  const emp={};
-  allU.forEach(u=>{if(u.empresa)emp[u.empresa]=(emp[u.empresa]||0)+1});
+  const emp={};allU.forEach(u=>{if(u.empresa)emp[u.empresa]=(emp[u.empresa]||0)+1});
   const topEmp=Object.entries(emp).sort((a,b)=>b[1]-a[1]).slice(0,6);
   const maxE=topEmp[0]?.[1]||1;
   const bColors=['var(--cyan)','var(--green)','var(--gold)','#8b7cf8','#f06080','#60d4a0'];
   document.getElementById('st-empresas').innerHTML=topEmp.length
     ?topEmp.map(([nm,n],i)=>`<div class="bar-row"><span class="bar-name" title="${esc(nm)}">${esc(nm)}</span><div class="bar-track"><div class="bar-fill" style="width:${Math.round(n/maxE*100)}%;background:${bColors[i%bColors.length]}"></div></div><span class="bar-val">${n}</span></div>`).join('')
     :'<span style="color:var(--txt4);font-size:12px">Sem dados</span>';
-
-  // Donut planos
-  const planos={basic:0,pro:0,enterprise:0};
-  allU.forEach(u=>planos[u.plano||'basic']=(planos[u.plano||'basic']||0)+1);
+  const planos={basic:0,pro:0,enterprise:0};allU.forEach(u=>planos[u.plano||'basic']=(planos[u.plano||'basic']||0)+1);
   const pColors={basic:'#4a5268',pro:'#00c8d4',enterprise:'#8b7cf8'};
   const pNames={basic:'Basic',pro:'Pro',enterprise:'Enterprise'};
   const total=allU.length||1;
-  const dc=document.getElementById('donut-canvas');
-  const ctx=dc.getContext('2d');
-  ctx.clearRect(0,0,86,86);
-  let start=-Math.PI/2;
+  const dc=document.getElementById('donut-canvas');const ctx=dc.getContext('2d');
+  ctx.clearRect(0,0,86,86);let start=-Math.PI/2;
   Object.entries(planos).forEach(([p,n])=>{
-    const slice=(n/total)*Math.PI*2;
-    ctx.beginPath();ctx.moveTo(43,43);ctx.arc(43,43,38,start,start+slice);
-    ctx.fillStyle=pColors[p];ctx.fill();
-    start+=slice;
+    const slice=(n/total)*Math.PI*2;ctx.beginPath();ctx.moveTo(43,43);ctx.arc(43,43,38,start,start+slice);
+    ctx.fillStyle=pColors[p];ctx.fill();start+=slice;
   });
-  // inner circle
-  ctx.beginPath();ctx.arc(43,43,24,0,Math.PI*2);
-  ctx.fillStyle='#111620';ctx.fill();
-  // center text
-  ctx.fillStyle='#8a94a8';ctx.font='500 9px IBM Plex Mono';ctx.textAlign='center';
-  ctx.fillText(total,43,41);
+  ctx.beginPath();ctx.arc(43,43,24,0,Math.PI*2);ctx.fillStyle='#111620';ctx.fill();
+  ctx.fillStyle='#8a94a8';ctx.font='500 9px IBM Plex Mono';ctx.textAlign='center';ctx.fillText(total,43,41);
   ctx.font='300 7px IBM Plex Sans';ctx.fillText('total',43,51);
-
-  document.getElementById('donut-leg').innerHTML=Object.entries(planos).map(([p,n])=>
-    `<div class="dleg-row"><div class="dleg-dot" style="background:${pColors[p]}"></div>${pNames[p]}<span class="dleg-val">${n}</span></div>`
-  ).join('');
-
-  // Sparkline
+  document.getElementById('donut-leg').innerHTML=Object.entries(planos).map(([p,n])=>`<div class="dleg-row"><div class="dleg-dot" style="background:${pColors[p]}"></div>${pNames[p]}<span class="dleg-val">${n}</span></div>`).join('');
   const dias7=[],labels7=[];
   for(let i=6;i>=0;i--){
-    const d=new Date();d.setDate(d.getDate()-i);
-    const iso=d.toISOString().slice(0,10);
+    const d=new Date();d.setDate(d.getDate()-i);const iso=d.toISOString().slice(0,10);
     dias7.push(allLogs.filter(l=>l.acao==='login'&&l.sucesso&&(l.momento||'').slice(0,10)===iso).length);
     labels7.push(d.toLocaleDateString('pt-BR',{day:'2-digit',month:'2-digit'}));
   }
-  const sc=document.getElementById('spark-canvas');
-  sc.width=sc.parentElement.clientWidth||280;sc.height=60;
-  const sx=sc.getContext('2d');
-  const maxS=Math.max(...dias7,1),w=sc.width,step=w/(dias7.length-1);
-  // gradient area
-  const grad=sx.createLinearGradient(0,0,0,60);
-  grad.addColorStop(0,'rgba(0,200,212,.18)');grad.addColorStop(1,'rgba(0,200,212,0)');
-  sx.beginPath();sx.moveTo(0,60-(dias7[0]/maxS)*50);
-  dias7.forEach((v,i)=>{if(i>0)sx.lineTo(i*step,60-(v/maxS)*50)});
+  const sc=document.getElementById('spark-canvas');sc.width=sc.parentElement.clientWidth||280;sc.height=60;
+  const sx=sc.getContext('2d');const maxS=Math.max(...dias7,1),w=sc.width,step=w/(dias7.length-1);
+  const grad=sx.createLinearGradient(0,0,0,60);grad.addColorStop(0,'rgba(0,200,212,.18)');grad.addColorStop(1,'rgba(0,200,212,0)');
+  sx.beginPath();sx.moveTo(0,60-(dias7[0]/maxS)*50);dias7.forEach((v,i)=>{if(i>0)sx.lineTo(i*step,60-(v/maxS)*50)});
   sx.lineTo(w,60);sx.lineTo(0,60);sx.fillStyle=grad;sx.fill();
-  // line
-  sx.beginPath();sx.moveTo(0,60-(dias7[0]/maxS)*50);
-  dias7.forEach((v,i)=>{if(i>0)sx.lineTo(i*step,60-(v/maxS)*50)});
+  sx.beginPath();sx.moveTo(0,60-(dias7[0]/maxS)*50);dias7.forEach((v,i)=>{if(i>0)sx.lineTo(i*step,60-(v/maxS)*50)});
   sx.strokeStyle='var(--cyan)';sx.lineWidth=1.5;sx.stroke();
-  // dots
-  dias7.forEach((v,i)=>{
-    sx.beginPath();sx.arc(i*step,60-(v/maxS)*50,2.5,0,Math.PI*2);
-    sx.fillStyle='var(--cyan)';sx.fill();
-  });
+  dias7.forEach((v,i)=>{sx.beginPath();sx.arc(i*step,60-(v/maxS)*50,2.5,0,Math.PI*2);sx.fillStyle='var(--cyan)';sx.fill()});
   document.getElementById('spark-labels').innerHTML=labels7.map(l=>'<span>'+l+'</span>').join('');
 }
 
-/* ── EXPORT TXT ── */
+/* EXPORT TXT */
 document.getElementById('btn-rel').onclick=()=>{
   if(!allU.length){toast('Sem dados','warn');return}
   const now=new Date().toLocaleString('pt-BR');
   const atv=allU.filter(u=>u.ativo&&!isExp(u.expira)).length;
-  let t='LUCS TECH — RELATÓRIO DE LICENÇAS\nGerado: '+now+'\n'+'─'.repeat(56)+'\n\nRESUMO\n  Total     : '+allU.length+'\n  Ativos    : '+atv+'\n  Bloqueados: '+allU.filter(u=>!u.ativo).length+'\n  Vencidos  : '+allU.filter(u=>isExp(u.expira)).length+'\n\n'+'─'.repeat(56)+'\n\n';
+  let t='LUCS TECH — RELATÓRIO DE LICENÇAS\nGerado: '+now+'\n'+'─'.repeat(56)+'\n\nRESUMO\n  Total     : '+allU.length+'\n  Ativos    : '+atv+'\n  Bloqueados: '+allU.filter(u=>!u.ativo).length+'\n  Vencidos  : '+allU.filter(u=>isExp(u.expira)).length+'\n  HWID vinc.: '+allU.filter(u=>u.hwid).length+'\n\n'+'─'.repeat(56)+'\n\n';
   allU.forEach((u,i)=>{
     t+=String(i+1).padStart(3,'0')+'. '+u.nome+' ['+((u.plano||'basic').toUpperCase())+']\n';
     if(u.empresa)t+='     Empresa   : '+u.empresa+'\n';
     if(u.email)  t+='     E-mail    : '+u.email+'\n';
-    t+='     Chave     : '+u.chave+'\n     Status    : '+(u.ativo?'ATIVO':'BLOQUEADO')+'\n     Vencimento: '+(u.expira?fDate(u.expira):'Sem limite')+'\n     Últ.acesso: '+(u.ultimo_acesso?fDT(u.ultimo_acesso):'Nunca')+'\n';
+    t+='     Chave     : '+u.chave+'\n     Status    : '+(u.ativo?'ATIVO':'BLOQUEADO')+'\n     HWID      : '+(u.hwid||'Livre')+'\n     Vencimento: '+(u.expira?fDate(u.expira):'Sem limite')+'\n     Últ.acesso: '+(u.ultimo_acesso?fDT(u.ultimo_acesso):'Nunca')+'\n';
     if(u.obs)t+='     Obs       : '+u.obs+'\n';
     t+='\n';
   });
   const a=document.createElement('a');
   a.href=URL.createObjectURL(new Blob([t],{type:'text/plain;charset=utf-8'}));
-  a.download='lucs-'+Date.now()+'.txt';a.click();
-  toast('Relatório exportado');
+  a.download='lucs-'+Date.now()+'.txt';a.click();toast('Relatório exportado');
 };
 
-/* ── EXPORT LOGS CSV ── */
 document.getElementById('btn-exp-logs').onclick=()=>{
   if(!allLogs.length){toast('Sem logs','warn');return}
   let t='DATA/HORA;AÇÃO;NOME;EMPRESA;CHAVE;IP;SUCESSO\n';
   allLogs.forEach(l=>{t+=`${l.momento||''};${l.acao||''};${l.nome||''};${l.empresa||''};${l.chave||''};${l.ip||''};${l.sucesso?'SIM':'NÃO'}\n`});
   const a=document.createElement('a');
   a.href=URL.createObjectURL(new Blob([t],{type:'text/csv;charset=utf-8'}));
-  a.download='lucs-logs-'+Date.now()+'.csv';a.click();
-  toast('Logs exportados');
+  a.download='lucs-logs-'+Date.now()+'.csv';a.click();toast('Logs exportados');
 };
 
-/* ── LIMPAR LOGS ── */
 document.getElementById('btn-limpar').onclick=async()=>{
-  if(!confirm('Limpar todos os logs de login?'))return;
+  if(!confirm('Limpar logs de login?'))return;
   try{await fetch('/admin/limpar-logs',{method:'POST'});toast('Logs limpos','inf');load()}
   catch{toast('Erro','err')}
 };
 
-/* ── START ── */
 load();
 setInterval(load,20000);
 </script>
 </body>
 </html>"""
+
+# ─────────────────────────────────────────────────────────────────────────────
+# ROUTES
+# ─────────────────────────────────────────────────────────────────────────────
 
 @app.route("/")
 def root():
@@ -1242,7 +1046,7 @@ def root():
 
 @app.route("/app")
 def pg_app():
-    return render_template_string(HTML.replace('data-modo="app"', 'data-modo="app"'))
+    return render_template_string(HTML)
 
 @app.route("/dm")
 def pg_dm():
@@ -1252,45 +1056,167 @@ def pg_dm():
 def legado():
     return redirect("/app")
 
+
+# ─── /api/validar ────────────────────────────────────────────────────────────
+# Compatível com apps antigos (sem hwid) E apps novos (com hwid).
+#
+#  Payload aceito:
+#    { "chave": "LUCS-XXXX-XXXX-XXXX" }                   → legado, sem HWID
+#    { "chave": "LUCS-XXXX-XXXX-XXXX", "hwid": "abc123" } → HWID obrigatório
+#
+#  Resposta sucesso (legado): { "ok": true, "nome": ..., "empresa": ..., "plano": ... }
+#  Resposta sucesso (hwid):   { "ok": true, "nome": ..., "empresa": ..., "plano": ...,
+#                               "access_token": "...",
+#                               "data_expiracao": "2025-12-31" | null,
+#                               "dias_restantes": 45 | null }
+# ─────────────────────────────────────────────────────────────────────────────
 @app.route("/api/validar", methods=["POST"])
 def validar():
     try:
         dados = request.json or {}
         chave = dados.get("chave", "").strip()
+        hwid  = (dados.get("hwid") or "").strip() or None
         ip    = request.headers.get('X-Forwarded-For', request.remote_addr or '').split(',')[0].strip()
+
         conn = get_db(); cur = conn.cursor()
-        cur.execute("SELECT nome, empresa, ativo, expira, plano FROM usuarios WHERE chave=%s", (chave,))
+        cur.execute(
+            "SELECT nome, empresa, ativo, expira, plano, hwid FROM usuarios WHERE chave=%s",
+            (chave,)
+        )
         u = cur.fetchone()
+
         sucesso = 0
         nome = empresa = plano = ""
+        motivo = "Chave não encontrada"
+        expira_date = None
+
         if u:
             nome    = u['nome']
             empresa = u['empresa'] or ''
             plano   = u['plano'] or 'basic'
             exp     = u['expira']
+
             if isinstance(exp, str):
                 try: exp = date.fromisoformat(exp)
                 except: exp = None
+            expira_date = exp
+
             vencido = exp and exp < datetime.now().date()
             ativo   = int(u['ativo']) if u['ativo'] is not None else 0
-            if ativo == 1 and not vencido:
+            db_hwid = u['hwid']
+
+            if not ativo:
+                motivo = "Licença bloqueada"
+            elif vencido:
+                motivo = "Licença expirada"
+            elif hwid:
+                # ── Modo HWID ──────────────────────────────────────────────
+                if not db_hwid:
+                    # Primeira vez: vincula o HWID automaticamente
+                    cur.execute(
+                        "UPDATE usuarios SET hwid=%s, ultimo_acesso=%s, ip_ultimo=%s WHERE chave=%s",
+                        (hwid, datetime.now(), ip, chave)
+                    )
+                    cur.execute(
+                        "INSERT INTO logs (nome,empresa,chave,acao,sucesso,momento,ip,detalhe) VALUES (%s,%s,%s,%s,%s,%s,%s,%s)",
+                        (nome, empresa, chave, 'hwid_vinculado', 1, datetime.now(), ip, hwid[:60])
+                    )
+                    conn.commit()
+                    sucesso = 1
+                elif db_hwid == hwid:
+                    # HWID bate: OK
+                    cur.execute(
+                        "UPDATE usuarios SET ultimo_acesso=%s, ip_ultimo=%s WHERE chave=%s",
+                        (datetime.now(), ip, chave)
+                    )
+                    sucesso = 1
+                else:
+                    # HWID diferente: nega acesso
+                    motivo = "Licença vinculada a outra máquina"
+                    cur.execute(
+                        "INSERT INTO logs (nome,empresa,chave,acao,sucesso,momento,ip,detalhe) VALUES (%s,%s,%s,%s,%s,%s,%s,%s)",
+                        (nome, empresa, chave, 'hwid_recusado', 0, datetime.now(), ip, hwid[:60])
+                    )
+                    conn.commit()
+                    cur.close(); conn.close()
+                    return jsonify({"ok": False, "msg": motivo}), 403
+            else:
+                # ── Modo legado (sem HWID) ─────────────────────────────────
+                cur.execute(
+                    "UPDATE usuarios SET ultimo_acesso=%s, ip_ultimo=%s WHERE chave=%s",
+                    (datetime.now(), ip, chave)
+                )
                 sucesso = 1
-                cur.execute("UPDATE usuarios SET ultimo_acesso=%s, ip_ultimo=%s WHERE chave=%s", (datetime.now(), ip, chave))
-        cur.execute("INSERT INTO logs (nome,empresa,chave,acao,sucesso,momento,ip) VALUES (%s,%s,%s,%s,%s,%s,%s)",
-            (nome or None, empresa or None, chave, 'login', sucesso, datetime.now(), ip))
+
+        # Registra log de login
+        cur.execute(
+            "INSERT INTO logs (nome,empresa,chave,acao,sucesso,momento,ip) VALUES (%s,%s,%s,%s,%s,%s,%s)",
+            (nome or None, empresa or None, chave, 'login', sucesso, datetime.now(), ip)
+        )
         conn.commit(); cur.close(); conn.close()
+
         if sucesso:
-            return jsonify({"ok": True, "nome": nome, "empresa": empresa, "plano": plano})
-        return jsonify({"ok": False, "msg": "Acesso negado"}), 403
+            resp = {"ok": True, "nome": nome, "empresa": empresa, "plano": plano}
+            # Só inclui token/data_expiracao se o app enviou hwid
+            if hwid:
+                token_data = gerar_token(chave, hwid, expira_date)
+                resp.update(token_data)
+            return jsonify(resp)
+
+        return jsonify({"ok": False, "msg": motivo}), 403
+
     except Exception as e:
         print(f"[validar] {e}")
         return jsonify({"ok": False, "msg": str(e)}), 500
+
+
+# ─── /api/verificar-token ────────────────────────────────────────────────────
+# Rota opcional para o app validar o token em cache sem bater no banco.
+# { "access_token": "..." } → { "ok": true, "chave": "...", "ts_expira": ... }
+@app.route("/api/verificar-token", methods=["POST"])
+def verificar_token_route():
+    try:
+        token = (request.json or {}).get("access_token", "")
+        payload = verificar_token(token)
+        if payload:
+            return jsonify({"ok": True, **payload})
+        return jsonify({"ok": False, "msg": "Token inválido ou expirado"}), 401
+    except Exception as e:
+        return jsonify({"ok": False, "msg": str(e)}), 500
+
+
+# ─── /admin/reset-hwid ───────────────────────────────────────────────────────
+@app.route("/admin/reset-hwid", methods=["POST"])
+def admin_reset_hwid():
+    try:
+        chave = (request.json or {}).get('chave', '')
+        conn  = get_db(); cur = conn.cursor()
+        cur.execute("SELECT nome, empresa FROM usuarios WHERE chave=%s", (chave,))
+        row = cur.fetchone()
+        if not row:
+            cur.close(); conn.close()
+            return jsonify({"ok": False, "msg": "Chave não encontrada"}), 404
+        cur.execute("UPDATE usuarios SET hwid=NULL WHERE chave=%s", (chave,))
+        cur.execute(
+            "INSERT INTO logs (nome,empresa,chave,acao,sucesso,momento) VALUES (%s,%s,%s,%s,%s,%s)",
+            (row['nome'], row['empresa'], chave, 'hwid_reset', 1, datetime.now())
+        )
+        conn.commit(); cur.close(); conn.close()
+        return jsonify({"ok": True})
+    except Exception as e:
+        print(f"[reset_hwid] {e}")
+        return jsonify({"ok": False, "msg": str(e)}), 500
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# ROTAS ADMIN (inalteradas exceto exportar-csv que agora inclui hwid)
+# ─────────────────────────────────────────────────────────────────────────────
 
 @app.route("/admin/dados")
 def admin_dados():
     try:
         conn = get_db(); cur = conn.cursor()
-        cur.execute("SELECT nome,email,empresa,chave,ativo,expira,plano,obs,ultimo_acesso,ip_ultimo FROM usuarios ORDER BY id DESC")
+        cur.execute("SELECT nome,email,empresa,chave,ativo,expira,plano,obs,ultimo_acesso,ip_ultimo,hwid FROM usuarios ORDER BY id DESC")
         usuarios = []
         for r in cur.fetchall():
             d = row_to_dict(r)
@@ -1330,8 +1256,10 @@ def admin_criar():
         chave_final = None
         for _ in range(10):
             try:
-                cur.execute("INSERT INTO usuarios (nome,empresa,email,chave,expira,ativo,plano,obs,criado_em) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s) RETURNING chave",
-                    (nome, empresa, email, chave, exp, 1, plano, obs, datetime.now()))
+                cur.execute(
+                    "INSERT INTO usuarios (nome,empresa,email,chave,expira,ativo,plano,obs,criado_em) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s) RETURNING chave",
+                    (nome, empresa, email, chave, exp, 1, plano, obs, datetime.now())
+                )
                 chave_final = cur.fetchone()['chave']
                 conn.commit(); break
             except psycopg2.errors.UniqueViolation:
@@ -1339,8 +1267,10 @@ def admin_criar():
         if not chave_final:
             cur.close(); conn.close()
             return jsonify({"ok": False, "msg": "Erro ao gerar chave"}), 500
-        cur.execute("INSERT INTO logs (nome,empresa,chave,acao,sucesso,momento,detalhe) VALUES (%s,%s,%s,%s,%s,%s,%s)",
-            (nome, empresa, chave_final, 'criacao', 1, datetime.now(), f"plano={plano}"))
+        cur.execute(
+            "INSERT INTO logs (nome,empresa,chave,acao,sucesso,momento,detalhe) VALUES (%s,%s,%s,%s,%s,%s,%s)",
+            (nome, empresa, chave_final, 'criacao', 1, datetime.now(), f"plano={plano}")
+        )
         conn.commit(); cur.close(); conn.close()
         return jsonify({"ok": True, "chave": chave_final})
     except Exception as e:
@@ -1362,18 +1292,22 @@ def admin_editar():
             return jsonify({"ok": False, "msg": "Nome obrigatorio"}), 400
         conn = get_db(); cur = conn.cursor()
         if renovar_dias == -1:
-            cur.execute("UPDATE usuarios SET nome=%s,email=%s,empresa=%s,plano=%s,obs=%s,expira=NULL WHERE chave=%s", (nome, email, empresa, plano, obs, chave))
+            cur.execute("UPDATE usuarios SET nome=%s,email=%s,empresa=%s,plano=%s,obs=%s,expira=NULL WHERE chave=%s",
+                        (nome, email, empresa, plano, obs, chave))
         elif renovar_dias > 0:
             cur.execute("SELECT expira FROM usuarios WHERE chave=%s", (chave,))
             row  = cur.fetchone()
             base = row['expira'] if row and row['expira'] else datetime.now().date()
             if isinstance(base, str): base = date.fromisoformat(base)
             nova_exp = max(base, datetime.now().date()) + timedelta(days=renovar_dias)
-            cur.execute("UPDATE usuarios SET nome=%s,email=%s,empresa=%s,plano=%s,obs=%s,expira=%s WHERE chave=%s", (nome, email, empresa, plano, obs, nova_exp, chave))
+            cur.execute("UPDATE usuarios SET nome=%s,email=%s,empresa=%s,plano=%s,obs=%s,expira=%s WHERE chave=%s",
+                        (nome, email, empresa, plano, obs, nova_exp, chave))
         else:
-            cur.execute("UPDATE usuarios SET nome=%s,email=%s,empresa=%s,plano=%s,obs=%s WHERE chave=%s", (nome, email, empresa, plano, obs, chave))
+            cur.execute("UPDATE usuarios SET nome=%s,email=%s,empresa=%s,plano=%s,obs=%s WHERE chave=%s",
+                        (nome, email, empresa, plano, obs, chave))
         conn.commit()
-        cur.execute("INSERT INTO logs (nome,empresa,chave,acao,sucesso,momento) VALUES (%s,%s,%s,%s,%s,%s)", (nome, empresa, chave, 'edicao', 1, datetime.now()))
+        cur.execute("INSERT INTO logs (nome,empresa,chave,acao,sucesso,momento) VALUES (%s,%s,%s,%s,%s,%s)",
+                    (nome, empresa, chave, 'edicao', 1, datetime.now()))
         conn.commit(); cur.close(); conn.close()
         return jsonify({"ok": True})
     except Exception as e:
@@ -1416,7 +1350,7 @@ def admin_deletar():
         cur.execute("DELETE FROM usuarios WHERE chave=%s", (chave,))
         if nome:
             cur.execute("INSERT INTO logs (nome,empresa,chave,acao,sucesso,momento) VALUES (%s,%s,%s,%s,%s,%s)",
-                (nome, empresa, chave, 'remocao', 1, datetime.now()))
+                        (nome, empresa, chave, 'remocao', 1, datetime.now()))
         conn.commit(); cur.close(); conn.close()
         return jsonify({"ok": True})
     except Exception as e:
@@ -1429,7 +1363,7 @@ def bloquear_todos():
         conn = get_db(); cur = conn.cursor()
         cur.execute("UPDATE usuarios SET ativo=0 WHERE ativo=1")
         cur.execute("INSERT INTO logs (nome,chave,acao,sucesso,momento) VALUES (%s,%s,%s,%s,%s)",
-            ('SISTEMA','TODOS','bloqueio_geral',1,datetime.now()))
+                    ('SISTEMA','TODOS','bloqueio_geral',1,datetime.now()))
         conn.commit(); cur.close(); conn.close()
         return jsonify({"ok": True})
     except Exception as e:
@@ -1445,7 +1379,7 @@ def renovar_vencidos():
         conn = get_db(); cur = conn.cursor()
         cur.execute("UPDATE usuarios SET expira=%s WHERE expira < %s", (nova_exp, hoje))
         cur.execute("INSERT INTO logs (nome,chave,acao,sucesso,momento,detalhe) VALUES (%s,%s,%s,%s,%s,%s)",
-            ('SISTEMA','TODOS','renovacao',1,datetime.now(),f"+{dias} dias"))
+                    ('SISTEMA','TODOS','renovacao',1,datetime.now(),f"+{dias} dias"))
         conn.commit(); cur.close(); conn.close()
         return jsonify({"ok": True})
     except Exception as e:
@@ -1456,18 +1390,19 @@ def renovar_vencidos():
 def exportar_csv():
     try:
         conn = get_db(); cur = conn.cursor()
-        cur.execute("SELECT nome,empresa,email,chave,ativo,expira,plano,obs,criado_em,ultimo_acesso,ip_ultimo FROM usuarios ORDER BY id DESC")
+        cur.execute("SELECT nome,empresa,email,chave,ativo,expira,plano,obs,criado_em,ultimo_acesso,ip_ultimo,hwid FROM usuarios ORDER BY id DESC")
         rows = cur.fetchall(); cur.close(); conn.close()
         si = io.StringIO()
         w  = csv.writer(si, delimiter=';')
-        w.writerow(['Nome','Empresa','E-mail','Chave','Ativo','Plano','Vencimento','Obs','Criado em','Ultimo acesso','IP ultimo'])
+        w.writerow(['Nome','Empresa','E-mail','Chave','Ativo','Plano','Vencimento','Obs','Criado em','Ultimo acesso','IP ultimo','HWID'])
         for r in rows:
             raw_at = r['ativo']
             ativo_str = 'Sim' if (int(raw_at)==1 if raw_at is not None else False) else 'Nao'
             w.writerow([r['nome'] or '',r['empresa'] or '',r['email'] or '',r['chave'] or '',ativo_str,r['plano'] or 'basic',
                 r['expira'].isoformat() if r['expira'] else '',r['obs'] or '',
                 r['criado_em'].strftime('%d/%m/%Y %H:%M') if r['criado_em'] else '',
-                r['ultimo_acesso'].strftime('%d/%m/%Y %H:%M') if r['ultimo_acesso'] else '',r['ip_ultimo'] or ''])
+                r['ultimo_acesso'].strftime('%d/%m/%Y %H:%M') if r['ultimo_acesso'] else '',
+                r['ip_ultimo'] or '', r['hwid'] or ''])
         out = make_response(si.getvalue())
         out.headers["Content-Disposition"] = f"attachment; filename=lucs-{datetime.now().strftime('%Y%m%d')}.csv"
         out.headers["Content-type"] = "text/csv; charset=utf-8"
