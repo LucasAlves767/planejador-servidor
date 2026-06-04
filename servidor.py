@@ -3,13 +3,23 @@ import psycopg2
 import psycopg2.extras
 from datetime import datetime, timedelta, date
 import os, random, string, csv, io, hashlib, hmac, secrets, time
+import mercadopago
 
 app = Flask(__name__)
 
 DATABASE_URL = os.environ.get("DATABASE_URL", "").replace("postgres://", "postgresql://", 1)
 ADMIN_TOKEN  = os.environ.get("ADMIN_TOKEN", "lucs2025")
-# Segredo para assinar os tokens — defina TOKEN_SECRET no Render como variável de ambiente
 TOKEN_SECRET = os.environ.get("TOKEN_SECRET", "lucs-secret-2025-mude-isso")
+
+# ── Mercado Pago ──────────────────────────────────────────────────────────────
+MP_ACCESS_TOKEN   = os.environ.get("MP_ACCESS_TOKEN", "")
+MP_WEBHOOK_SECRET = os.environ.get("MP_WEBHOOK_SECRET", "troque-isso")
+sdk = mercadopago.SDK(MP_ACCESS_TOKEN)
+
+PRECOS = {
+    "30": 29.90,
+    "60": 49.90,
+}
 
 def get_db():
     if not DATABASE_URL:
@@ -37,36 +47,26 @@ def nova_chave():
     chars = string.ascii_uppercase + string.digits
     return "LUCS-" + "-".join(''.join(random.choices(chars, k=4)) for _ in range(3))
 
-# ── Gera token assinado com HMAC-SHA256 ──────────────────────────────────────
-def gerar_token(chave: str, hwid: str | None, expira_date) -> dict:
-    """
-    Retorna {'access_token': str, 'data_expiracao': str | None, 'dias_restantes': int | None}
-    O token é válido por 24h e contém: chave + hwid + timestamp de criação + hash de integridade.
-    """
+def gerar_token(chave: str, hwid, expira_date) -> dict:
     ts_criacao = int(time.time())
     ts_expira  = int(datetime.combine(expira_date, datetime.min.time()).timestamp()) if expira_date else 0
-
     payload = f"{chave}|{hwid or 'none'}|{ts_criacao}|{ts_expira}"
     sig = hmac.new(TOKEN_SECRET.encode(), payload.encode(), hashlib.sha256).hexdigest()[:16]
     token = f"{payload}|{sig}"
-    # Codifica em base-hex para não ter caracteres estranhos
     access_token = token.encode().hex()
-
     if expira_date:
         dias_restantes = (expira_date - datetime.now().date()).days
         data_expiracao = expira_date.isoformat()
     else:
         dias_restantes = None
         data_expiracao = None
-
     return {
         "access_token":   access_token,
         "data_expiracao": data_expiracao,
         "dias_restantes": dias_restantes,
     }
 
-def verificar_token(token_hex: str) -> dict | None:
-    """Valida um access_token. Retorna payload dict ou None se inválido/expirado."""
+def verificar_token(token_hex: str):
     try:
         token = bytes.fromhex(token_hex).decode()
         parts = token.split("|")
@@ -77,7 +77,6 @@ def verificar_token(token_hex: str) -> dict | None:
         sig_calc = hmac.new(TOKEN_SECRET.encode(), payload.encode(), hashlib.sha256).hexdigest()[:16]
         if not hmac.compare_digest(sig_recv, sig_calc):
             return None
-        # Token expira em 24h
         if int(time.time()) - int(ts_criacao) > 86400:
             return None
         return {"chave": chave, "hwid": hwid, "ts_expira": int(ts_expira)}
@@ -113,6 +112,15 @@ def init_db():
                 ip      TEXT,
                 detalhe TEXT
             );
+            CREATE TABLE IF NOT EXISTS pagamentos (
+                id         SERIAL PRIMARY KEY,
+                mp_id      TEXT UNIQUE NOT NULL,
+                chave      TEXT NOT NULL,
+                plano      TEXT DEFAULT '30',
+                status     TEXT DEFAULT 'pending',
+                criado_em  TIMESTAMP DEFAULT NOW(),
+                atualizado TIMESTAMP DEFAULT NOW()
+            );
         """)
         conn.commit()
         migrations = [
@@ -124,13 +132,13 @@ def init_db():
             "ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS criado_em TIMESTAMP DEFAULT NOW()",
             "ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS ultimo_acesso TIMESTAMP",
             "ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS ip_ultimo TEXT",
-            # ── NOVA COLUNA HWID ──
             "ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS hwid TEXT",
             "ALTER TABLE logs ADD COLUMN IF NOT EXISTS nome TEXT",
             "ALTER TABLE logs ADD COLUMN IF NOT EXISTS empresa TEXT",
             "ALTER TABLE logs ADD COLUMN IF NOT EXISTS acao TEXT",
             "ALTER TABLE logs ADD COLUMN IF NOT EXISTS ip TEXT",
             "ALTER TABLE logs ADD COLUMN IF NOT EXISTS detalhe TEXT",
+            "CREATE INDEX IF NOT EXISTS idx_pagamentos_chave ON pagamentos(chave)",
         ]
         for sql in migrations:
             try: cur.execute(sql); conn.commit()
@@ -297,7 +305,6 @@ tbody tr:hover td{background:rgba(255,255,255,.015)}
 .kchip{display:inline-flex;align-items:center;gap:6px;cursor:pointer;background:var(--bg3);color:var(--gold);border:1px solid rgba(232,160,32,.2);border-radius:var(--r3);padding:4px 10px;font-family:'IBM Plex Mono',monospace;font-size:10px;transition:all .15s}
 .kchip:hover{background:var(--gold-bg);border-color:rgba(232,160,32,.35)}
 .kchip:active{transform:scale(.97)}
-/* HWID badge */
 .hbadge{display:inline-flex;align-items:center;gap:5px;border-radius:var(--r3);padding:3px 9px;font-family:'IBM Plex Mono',monospace;font-size:9px;cursor:default}
 .hbadge.vinc{background:rgba(139,124,248,.1);color:#8b7cf8;border:1px solid rgba(139,124,248,.2)}
 .hbadge.livre{background:var(--bg3);color:var(--txt4);border:1px solid var(--line)}
@@ -336,7 +343,6 @@ tbody tr:hover td{background:rgba(255,255,255,.015)}
 .ropt:hover:not(.on){border-color:var(--line2);color:var(--txt2)}
 .ropt.on{background:var(--green-bg);border-color:rgba(0,200,122,.3);color:var(--green)}
 .modal-footer{display:flex;gap:8px;justify-content:flex-end;margin-top:22px;padding-top:18px;border-top:1px solid var(--line)}
-/* HWID info box no modal */
 .hwid-box{background:var(--bg3);border:1px solid var(--line);border-radius:var(--r2);padding:12px 14px;margin-bottom:12px}
 .hwid-box-label{font-family:'IBM Plex Mono',monospace;font-size:8px;letter-spacing:2px;color:var(--txt3);margin-bottom:6px}
 .hwid-box-val{font-family:'IBM Plex Mono',monospace;font-size:10px;color:#8b7cf8;word-break:break-all}
@@ -378,7 +384,6 @@ tbody tr:hover td{background:rgba(255,255,255,.015)}
 </head>
 <body data-modo="app">
 <div class="page">
-  <!-- TOPBAR -->
   <div class="topbar">
     <div class="brand">
       <div class="brand-mark">
@@ -403,7 +408,6 @@ tbody tr:hover td{background:rgba(255,255,255,.015)}
     </div>
   </div>
 
-  <!-- KPIs -->
   <div class="kpis">
     <div class="kpi" style="animation-delay:.05s">
       <div class="kpi-stripe"></div><div class="kpi-icon">⬡</div>
@@ -443,7 +447,6 @@ tbody tr:hover td{background:rgba(255,255,255,.015)}
     </div>
   </div>
 
-  <!-- PANEL -->
   <div class="panel">
     <div class="panel-tabs">
       <button class="ptab on" data-tab="licencas">
@@ -464,7 +467,6 @@ tbody tr:hover td{background:rgba(255,255,255,.015)}
       </button>
     </div>
 
-    <!-- TAB: LICENÇAS -->
     <div class="tab-body on" id="tab-licencas">
       <div class="sec-hd">
         <div class="sec-left">
@@ -521,7 +523,6 @@ tbody tr:hover td{background:rgba(255,255,255,.015)}
       </div>
     </div>
 
-    <!-- TAB: NOVA LICENÇA -->
     <div class="tab-body" id="tab-nova">
       <div class="sec-hd"><div class="sec-title">CRIAR NOVA LICENÇA</div></div>
       <div class="fgrid">
@@ -549,7 +550,6 @@ tbody tr:hover td{background:rgba(255,255,255,.015)}
       </div>
     </div>
 
-    <!-- TAB: STATS -->
     <div class="tab-body" id="tab-stats">
       <div class="sgrid">
         <div class="scard"><div class="scard-title">TOP EMPRESAS</div><div id="st-empresas"></div></div>
@@ -568,7 +568,6 @@ tbody tr:hover td{background:rgba(255,255,255,.015)}
       </div>
     </div>
 
-    <!-- TAB: ATIVIDADE -->
     <div class="tab-body" id="tab-logs">
       <div class="sec-hd">
         <div class="sec-title">ATIVIDADE RECENTE</div>
@@ -586,7 +585,6 @@ tbody tr:hover td{background:rgba(255,255,255,.015)}
   </div>
 </div>
 
-<!-- MODAL EDITAR -->
 <div class="overlay" id="modal-overlay">
   <div class="modal">
     <div class="modal-hd">
@@ -601,7 +599,6 @@ tbody tr:hover td{background:rgba(255,255,255,.015)}
       </div>
       <button class="mclose" id="modal-close">✕</button>
     </div>
-    <!-- HWID info box -->
     <div class="hwid-box" id="m-hwid-box">
       <div class="hwid-box-label">HWID VINCULADO</div>
       <div class="hwid-box-val none" id="m-hwid-val">Nenhum — licença livre para qualquer máquina</div>
@@ -650,7 +647,6 @@ tbody tr:hover td{background:rgba(255,255,255,.015)}
   </div>
 </div>
 
-<!-- TOAST -->
 <div class="toast" id="toast"><div class="tdot tok" id="tdot"></div><span id="tmsg"></span></div>
 
 <script>
@@ -800,7 +796,6 @@ document.querySelectorAll('.fchip').forEach(b=>{
 });
 document.getElementById('inp-q').oninput=e=>{busca=e.target.value.trim();renderT()};
 
-/* CRIAR */
 document.getElementById('btn-criar').onclick=async()=>{
   const nome=document.getElementById('i-nome').value.trim();
   if(!nome){toast('Informe o nome','warn');return}
@@ -828,7 +823,6 @@ document.getElementById('btn-criar').onclick=async()=>{
   finally{btn.disabled=false;btn.innerHTML='<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M12 5v14M5 12h14"/></svg>GERAR'}
 };
 
-/* TOGGLE */
 async function tog(chave){
   try{
     const r=await fetch('/admin/toggle',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({chave})});
@@ -837,7 +831,6 @@ async function tog(chave){
   }catch{toast('Erro de conexão','err')}
 }
 
-/* DELETE */
 async function rem(chave){
   if(!confirm('Remover este cliente permanentemente?'))return;
   try{
@@ -847,7 +840,6 @@ async function rem(chave){
   }catch{toast('Erro de conexão','err')}
 }
 
-/* RESET HWID */
 async function resetHwid(chave){
   if(!confirm('Resetar HWID desta licença?\nO próximo login vinculará uma nova máquina.'))return;
   try{
@@ -857,7 +849,6 @@ async function resetHwid(chave){
   }catch{toast('Erro de conexão','err')}
 }
 
-/* BLOQUEAR TODOS */
 document.getElementById('btn-bloqtodos').onclick=async()=>{
   const n=allU.filter(u=>u.ativo).length;
   if(!n){toast('Nenhum ativo','warn');return}
@@ -866,7 +857,6 @@ document.getElementById('btn-bloqtodos').onclick=async()=>{
   catch{toast('Erro','err')}
 };
 
-/* RENOVAR VENCIDOS */
 document.getElementById('btn-renovar-venc').onclick=async()=>{
   const venc=allU.filter(u=>isExp(u.expira));
   if(!venc.length){toast('Nenhum vencido','warn');return}
@@ -879,7 +869,6 @@ document.getElementById('btn-renovar-venc').onclick=async()=>{
   }catch{toast('Erro','err')}
 };
 
-/* MODAL EDITAR */
 let editChave='';
 function openEdit(u){
   editChave=u.chave;editDias=0;
@@ -890,7 +879,6 @@ function openEdit(u){
   document.getElementById('m-obs').value=u.obs||'';
   document.querySelectorAll('.ropt').forEach(b=>b.classList.remove('on'));
   document.querySelector('.ropt[data-d="0"]').classList.add('on');
-  // HWID
   const hwidVal=document.getElementById('m-hwid-val');
   const resetBtn=document.getElementById('m-btn-reset-hwid');
   const hint=document.getElementById('m-hwid-hint');
@@ -931,7 +919,6 @@ document.getElementById('modal-save').onclick=async()=>{
   }catch{toast('Erro de conexão','err')}
 };
 
-/* LOGS */
 function renderLogs(){
   const lb=document.getElementById('logs');
   if(!allLogs.length){lb.innerHTML='<span style="color:var(--txt4)">Sem atividade.</span>';return}
@@ -954,7 +941,6 @@ function renderLogs(){
   }).join('');
 }
 
-/* STATS */
 function renderStats(){
   const emp={};allU.forEach(u=>{if(u.empresa)emp[u.empresa]=(emp[u.empresa]||0)+1});
   const topEmp=Object.entries(emp).sort((a,b)=>b[1]-a[1]).slice(0,6);
@@ -994,7 +980,6 @@ function renderStats(){
   document.getElementById('spark-labels').innerHTML=labels7.map(l=>'<span>'+l+'</span>').join('');
 }
 
-/* EXPORT TXT */
 document.getElementById('btn-rel').onclick=()=>{
   if(!allU.length){toast('Sem dados','warn');return}
   const now=new Date().toLocaleString('pt-BR');
@@ -1035,7 +1020,7 @@ setInterval(load,20000);
 </html>"""
 
 # ─────────────────────────────────────────────────────────────────────────────
-# ROUTES
+# ROTAS PRINCIPAIS
 # ─────────────────────────────────────────────────────────────────────────────
 
 @app.route("/")
@@ -1057,19 +1042,10 @@ def legado():
     return redirect("/app")
 
 
-# ─── /api/validar ────────────────────────────────────────────────────────────
-# Compatível com apps antigos (sem hwid) E apps novos (com hwid).
-#
-#  Payload aceito:
-#    { "chave": "LUCS-XXXX-XXXX-XXXX" }                   → legado, sem HWID
-#    { "chave": "LUCS-XXXX-XXXX-XXXX", "hwid": "abc123" } → HWID obrigatório
-#
-#  Resposta sucesso (legado): { "ok": true, "nome": ..., "empresa": ..., "plano": ... }
-#  Resposta sucesso (hwid):   { "ok": true, "nome": ..., "empresa": ..., "plano": ...,
-#                               "access_token": "...",
-#                               "data_expiracao": "2025-12-31" | null,
-#                               "dias_restantes": 45 | null }
 # ─────────────────────────────────────────────────────────────────────────────
+# API — VALIDAR LICENÇA
+# ─────────────────────────────────────────────────────────────────────────────
+
 @app.route("/api/validar", methods=["POST"])
 def validar():
     try:
@@ -1110,9 +1086,7 @@ def validar():
             elif vencido:
                 motivo = "Licença expirada"
             elif hwid:
-                # ── Modo HWID ──────────────────────────────────────────────
                 if not db_hwid:
-                    # Primeira vez: vincula o HWID automaticamente
                     cur.execute(
                         "UPDATE usuarios SET hwid=%s, ultimo_acesso=%s, ip_ultimo=%s WHERE chave=%s",
                         (hwid, datetime.now(), ip, chave)
@@ -1124,14 +1098,12 @@ def validar():
                     conn.commit()
                     sucesso = 1
                 elif db_hwid == hwid:
-                    # HWID bate: OK
                     cur.execute(
                         "UPDATE usuarios SET ultimo_acesso=%s, ip_ultimo=%s WHERE chave=%s",
                         (datetime.now(), ip, chave)
                     )
                     sucesso = 1
                 else:
-                    # HWID diferente: nega acesso
                     motivo = "Licença vinculada a outra máquina"
                     cur.execute(
                         "INSERT INTO logs (nome,empresa,chave,acao,sucesso,momento,ip,detalhe) VALUES (%s,%s,%s,%s,%s,%s,%s,%s)",
@@ -1141,14 +1113,12 @@ def validar():
                     cur.close(); conn.close()
                     return jsonify({"ok": False, "msg": motivo}), 403
             else:
-                # ── Modo legado (sem HWID) ─────────────────────────────────
                 cur.execute(
                     "UPDATE usuarios SET ultimo_acesso=%s, ip_ultimo=%s WHERE chave=%s",
                     (datetime.now(), ip, chave)
                 )
                 sucesso = 1
 
-        # Registra log de login
         cur.execute(
             "INSERT INTO logs (nome,empresa,chave,acao,sucesso,momento,ip) VALUES (%s,%s,%s,%s,%s,%s,%s)",
             (nome or None, empresa or None, chave, 'login', sucesso, datetime.now(), ip)
@@ -1157,7 +1127,6 @@ def validar():
 
         if sucesso:
             resp = {"ok": True, "nome": nome, "empresa": empresa, "plano": plano}
-            # Só inclui token/data_expiracao se o app enviou hwid
             if hwid:
                 token_data = gerar_token(chave, hwid, expira_date)
                 resp.update(token_data)
@@ -1170,9 +1139,6 @@ def validar():
         return jsonify({"ok": False, "msg": str(e)}), 500
 
 
-# ─── /api/verificar-token ────────────────────────────────────────────────────
-# Rota opcional para o app validar o token em cache sem bater no banco.
-# { "access_token": "..." } → { "ok": true, "chave": "...", "ts_expira": ... }
 @app.route("/api/verificar-token", methods=["POST"])
 def verificar_token_route():
     try:
@@ -1185,7 +1151,186 @@ def verificar_token_route():
         return jsonify({"ok": False, "msg": str(e)}), 500
 
 
-# ─── /admin/reset-hwid ───────────────────────────────────────────────────────
+# ─────────────────────────────────────────────────────────────────────────────
+# MERCADO PAGO — GERAR PIX
+# ─────────────────────────────────────────────────────────────────────────────
+
+@app.route("/api/pagar", methods=["POST"])
+def api_pagar():
+    try:
+        dados = request.json or {}
+        chave = dados.get("chave", "").strip()
+        plano = str(dados.get("plano", "30")).strip()
+
+        if not chave:
+            return jsonify({"ok": False, "msg": "Chave obrigatória"}), 400
+        if plano not in PRECOS:
+            return jsonify({"ok": False, "msg": "Plano inválido (use '30' ou '60')"}), 400
+
+        conn = get_db(); cur = conn.cursor()
+        cur.execute("SELECT nome, email FROM usuarios WHERE chave=%s", (chave,))
+        user = cur.fetchone()
+        if not user:
+            cur.close(); conn.close()
+            return jsonify({"ok": False, "msg": "Chave não encontrada"}), 404
+
+        valor     = PRECOS[plano]
+        descricao = f"Lucs Tech – {plano} dias"
+
+        payment_data = {
+            "transaction_amount": valor,
+            "description":        descricao,
+            "payment_method_id":  "pix",
+            "payer": {
+                "email": user["email"] or "cliente@lucstech.com",
+            },
+            "external_reference": f"{chave}|{plano}",
+        }
+
+        result = sdk.payment().create(payment_data)
+        pay    = result["response"]
+
+        if result["status"] not in (200, 201):
+            print(f"[MP] erro ao criar pagamento: {pay}")
+            cur.close(); conn.close()
+            return jsonify({"ok": False, "msg": pay.get("message", "Erro MP")}), 500
+
+        mp_id = str(pay["id"])
+        pix   = pay["point_of_interaction"]["transaction_data"]
+
+        cur.execute("""
+            INSERT INTO pagamentos (mp_id, chave, plano, status)
+            VALUES (%s, %s, %s, 'pending')
+            ON CONFLICT (mp_id) DO NOTHING
+        """, (mp_id, chave, plano))
+        conn.commit(); cur.close(); conn.close()
+
+        return jsonify({
+            "ok":             True,
+            "mp_id":          mp_id,
+            "qr_code":        pix.get("qr_code"),
+            "qr_code_base64": pix.get("qr_code_base64"),
+            "valor":          valor,
+            "descricao":      descricao,
+        })
+
+    except Exception as e:
+        print(f"[api_pagar] {e}")
+        return jsonify({"ok": False, "msg": str(e)}), 500
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# MERCADO PAGO — WEBHOOK
+# ─────────────────────────────────────────────────────────────────────────────
+
+@app.route("/webhook/mercadopago", methods=["POST"])
+def webhook_mercadopago():
+    try:
+        body       = request.json or {}
+        topic      = body.get("type") or request.args.get("type", "")
+        if topic not in ("payment", "topic"):
+            return jsonify({"ok": True, "msg": "evento ignorado"}), 200
+
+        payment_id = str(body.get("data", {}).get("id") or request.args.get("id", ""))
+        if not payment_id:
+            return jsonify({"ok": False, "msg": "payment_id ausente"}), 400
+
+        result = sdk.payment().get(payment_id)
+        pay    = result["response"]
+
+        status       = pay.get("status")
+        external_ref = pay.get("external_reference", "")
+
+        print(f"[webhook] payment_id={payment_id} status={status} ref={external_ref}")
+
+        if status == "approved":
+            partes = external_ref.split("|")
+            if len(partes) != 2:
+                return jsonify({"ok": False, "msg": "external_reference inválido"}), 400
+
+            chave, plano = partes[0].strip(), partes[1].strip()
+            dias         = int(plano) if plano.isdigit() else 30
+
+            conn = get_db(); cur = conn.cursor()
+
+            # Proteção contra processamento duplo
+            cur.execute("SELECT status FROM pagamentos WHERE mp_id=%s", (payment_id,))
+            row = cur.fetchone()
+            if row and row["status"] == "approved":
+                cur.close(); conn.close()
+                return jsonify({"ok": True, "msg": "já processado"}), 200
+
+            cur.execute("""
+                UPDATE pagamentos SET status='approved', atualizado=NOW() WHERE mp_id=%s
+            """, (payment_id,))
+
+            # Adiciona dias: se vencida parte de hoje, se vigente adiciona sobre a data atual
+            cur.execute("""
+                UPDATE usuarios
+                SET expira = GREATEST(COALESCE(expira, CURRENT_DATE), CURRENT_DATE)
+                           + (%s || ' days')::INTERVAL
+                WHERE chave = %s
+                RETURNING nome, empresa, expira
+            """, (str(dias), chave))
+            updated = cur.fetchone()
+
+            if updated:
+                cur.execute("""
+                    INSERT INTO logs (nome, empresa, chave, acao, sucesso, momento, detalhe)
+                    VALUES (%s, %s, %s, %s, %s, NOW(), %s)
+                """, (
+                    updated["nome"], updated["empresa"], chave, "renovacao", 1,
+                    f"MP pago: +{dias} dias | nova expiração: {updated['expira']} | mp_id: {payment_id}"
+                ))
+                conn.commit()
+                print(f"[webhook] ✅ {chave} renovado +{dias} dias → {updated['expira']}")
+            else:
+                conn.rollback()
+                print(f"[webhook] ⚠️  chave não encontrada: {chave}")
+
+            cur.close(); conn.close()
+
+        else:
+            try:
+                conn = get_db(); cur = conn.cursor()
+                cur.execute("UPDATE pagamentos SET status=%s, atualizado=NOW() WHERE mp_id=%s", (status, payment_id))
+                conn.commit(); cur.close(); conn.close()
+            except Exception:
+                pass
+
+        return jsonify({"ok": True}), 200
+
+    except Exception as e:
+        print(f"[webhook_mercadopago] {e}")
+        return jsonify({"ok": True, "warn": str(e)}), 200
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# MERCADO PAGO — CONSULTAR STATUS (polling do app cliente)
+# ─────────────────────────────────────────────────────────────────────────────
+
+@app.route("/api/pagamento-status", methods=["GET"])
+def api_pagamento_status():
+    try:
+        mp_id = request.args.get("mp_id", "").strip()
+        if not mp_id:
+            return jsonify({"ok": False, "msg": "mp_id obrigatório"}), 400
+
+        result = sdk.payment().get(mp_id)
+        pay    = result["response"]
+        status = pay.get("status", "unknown")
+
+        return jsonify({"ok": True, "status": status})
+
+    except Exception as e:
+        print(f"[api_pagamento_status] {e}")
+        return jsonify({"ok": False, "msg": str(e)}), 500
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# ROTAS ADMIN
+# ─────────────────────────────────────────────────────────────────────────────
+
 @app.route("/admin/reset-hwid", methods=["POST"])
 def admin_reset_hwid():
     try:
@@ -1206,11 +1351,6 @@ def admin_reset_hwid():
     except Exception as e:
         print(f"[reset_hwid] {e}")
         return jsonify({"ok": False, "msg": str(e)}), 500
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# ROTAS ADMIN (inalteradas exceto exportar-csv que agora inclui hwid)
-# ─────────────────────────────────────────────────────────────────────────────
 
 @app.route("/admin/dados")
 def admin_dados():
@@ -1427,6 +1567,7 @@ def health():
         return jsonify({"ok": True, "db": "supabase", "ts": datetime.now().isoformat()})
     except Exception as e:
         return jsonify({"ok": False, "msg": str(e)}), 500
+
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 10000)))
